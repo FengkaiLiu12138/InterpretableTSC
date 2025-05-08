@@ -57,3 +57,15 @@ class FTSEDataCatcher:
                 print("Data fetch failed.")
         except Exception as e:
             print(f"An error occurred: {e}")
+
+
+
+if __name__ == "__main__":
+    symbol = "^FTSE"
+    interval = "1m"
+    chunk_days = 7
+    start_date = dt.datetime(2025, 5, 1)
+    end_date = dt.datetime(2025, 5, 7)
+
+    ftse_data_catcher = FTSEDataCatcher(symbol, interval, chunk_days, start_date, end_date)
+    ftse_data_catcher.catch_data("./archive/ftse_minute_data_may.csv")

@@ -1,645 +1,591 @@
 import copy
-from BaselineModel.MLP_baseline import MLP
-from Tools.DatasetConverter import DatasetConverter
-from Tools.FTSE_dataset import FTSEDataCatcher
-import datetime as dt
-import pandas as pd
+import os
+from typing import Literal
+
 import numpy as np
+import pandas as pd
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, random_split
+
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from sklearn.utils import resample
+
+import matplotlib
+matplotlib.use("Agg")  # Non-interactive backend; figures will be saved, not shown.
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import ParameterGrid
-import os
+import optuna
+
+# Example imports for your baseline models.
+from BaselineModel import (
+    ResNet_baseline,
+    CNN_baseline,
+    LSTM_baseline,
+    MLP_baseline,
+    FCN_baseline
+)
 
 
+###############################################################################
+#  Pipeline
+###############################################################################
 class Pipeline:
-    def __init__(self, model, file_path, save_path=None):
-        self.model = model
+    """
+    End-to-end pipeline with optional class balancing and Optuna HPO.
+
+    * Default: binary classification, labels {0, 1} with 1 as the positive class
+    * F1 is computed with pos_label=1
+    """
+
+    def __init__(
+        self,
+        model_class,
+        file_path: str,
+        n_vars: int,
+        num_classes: int,
+        result_dir: str | None = None
+    ):
+        """
+        Args:
+            model_class: The model class (e.g. CNN_baseline.CNN), NOT an instance
+            file_path: Path to your CSV
+            n_vars: Number of features (e.g. 5 for [Close, High, Low, Open, Volume])
+            num_classes: Number of classes (2 for binary)
+            result_dir: Where to store figures & results. If None, auto-named by model_class
+        """
+        self.model_class = model_class
         self.file_path = file_path
-        self.save_path = save_path
+        self.n_vars = n_vars
+        self.num_classes = num_classes
+
+        # The window_size is fixed at 600
+        self.window_size = 600
+        self.model = None
+
+        # Decide the output folder
+        model_type = model_class.__name__  # e.g. "ResNet"
+        if result_dir is None:
+            result_dir = f"../Result/{model_type}"
+        self.result_dir = result_dir
+        os.makedirs(self.result_dir, exist_ok=True)
+
+        # Device
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device} | result_dir={self.result_dir}")
+
+        # Data-related
+        self._df = None
         self.dataset = None
         self.train_loader = None
         self.valid_loader = None
         self.test_loader = None
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"Using device: {self.device}")
-        self.model.to(self.device)
+
+        # Training/evaluation
         self.best_model = None
-        self.window_size = None
-        self.confusion_mat = None
-        self.y_pred = None
-        self.y_true = None
         self.X_test = None
+        self.y_true = None
+        self.confusion_mat = None
+        self._opt_metric = "loss"
 
-        # Safely detect model dimensions
-        self.input_size = None
-        self.num_classes = None
+        # For repeated usage in Optuna, etc.
+        self._balance = False
+        self._balance_strategy = "over"
+        self._normalize = True
 
-        # Find input and output dimensions by checking the model layers
-        if hasattr(model, 'model'):
-            # Find first Linear layer for input size
-            for layer in model.model:
-                if isinstance(layer, nn.Linear):
-                    self.input_size = layer.in_features
-                    break
+        # Load CSV once
+        self._load_raw_csv()
 
-            # Find last Linear layer for output size
-            for layer in reversed(list(model.model)):
-                if isinstance(layer, nn.Linear):
-                    self.num_classes = layer.out_features
-                    break
+    def _load_raw_csv(self):
+        """Load the CSV file into self._df so we can do repeated sliding-window."""
+        df = pd.read_csv(self.file_path)
+        self._df = df.copy()
 
-        print(f"Detected model dimensions: input_size={self.input_size}, num_classes={self.num_classes}")
-
-    def preprocessing(self, label_type, window_size, normalize):
-        """
-        Preprocess the dataset for training and evaluation.
-        :param label_type: 0 for uni-variate, 1 for multi-variate
-        :param window_size: defines the size of the sliding window
-        :param normalize: normalize the data or not
-        """
-        # Convert the dataset to the required format
-        dataset_converter = DatasetConverter(self.file_path, self.save_path)
-        self.dataset = dataset_converter.convert(label_type, window_size, normalize)
-        print(f"Preprocessed dataset shape: {self.dataset.shape}")
-        self.window_size = window_size
-
-    def data_loader(self, batch_size=32, train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15):
-        """
-        Split dataset into train, validation and test sets and create DataLoader objects.
-
-        :param batch_size: batch size for DataLoader
-        :param train_ratio: ratio of training data
-        :param valid_ratio: ratio of validation data
-        :param test_ratio: ratio of test data
-        """
-        if self.dataset is None:
-            raise ValueError("Dataset not preprocessed. Call preprocessing() first.")
-
-        # Read the dataset
-        if self.save_path and os.path.exists(self.save_path):
-            df = pd.read_csv(self.save_path)
-        else:
-            df = self.dataset
-
-        print(f"Dataset shape: {df.shape}")
-
-        # Extract features and labels
-        X = df.drop('Labels', axis=1).values  # Features
-        y = df['Labels'].values  # Labels
-
-        # Reshape X for MLP input if needed (time series to 2D)
-        if len(X.shape) > 2:  # If X is 3D (samples, time_steps, features)
-            X = X.reshape(X.shape[0], -1)  # Flatten to 2D (samples, time_steps*features)
-
-        # Get the input size for the MLP model (number of features)
-        self.input_size = X.shape[1]
-        print(f"Input shape for MLP: {X.shape}, features dimension: {self.input_size}")
-
-        # Update model if needed
-        if hasattr(self.model, 'model'):
-            # Find the first Linear layer and check its input dimension
-            first_linear = None
-            for layer in self.model.model:
-                if isinstance(layer, nn.Linear):
-                    first_linear = layer
-                    break
-
-            if first_linear and first_linear.in_features != self.input_size:
-                print(f"Adjusting model input size from {first_linear.in_features} to {self.input_size}")
-                # Create a new model with the correct input size
-                self.model = MLP(input_size=self.input_size, num_classes=self.num_classes).to(self.device)
-
-        # Convert to PyTorch tensors
-        X_tensor = torch.FloatTensor(X)
-        y_tensor = torch.LongTensor(y)
-
-        # Create TensorDataset
-        dataset = TensorDataset(X_tensor, y_tensor)
-
-        # Calculate split sizes
-        total_size = len(dataset)
-        train_size = int(train_ratio * total_size)
-        valid_size = int(valid_ratio * total_size)
-        test_size = total_size - train_size - valid_size
-
-        # Split the dataset
-        train_dataset, valid_dataset, test_dataset = random_split(
-            dataset, [train_size, valid_size, test_size],
-            generator=torch.Generator().manual_seed(42)  # For reproducibility
-        )
-
-        # Create DataLoaders
-        self.train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        self.valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
-        self.test_loader = DataLoader(test_dataset, batch_size=batch_size)
-
-        print(
-            f"Data split complete: {train_size} training samples, {valid_size} validation samples, {test_size} test samples")
-
-        # Save test data for visualization
-        test_data = []
-        test_labels = []
-        for inputs, labels in test_dataset:
-            test_data.append(inputs)
-            test_labels.append(labels)
-
-        self.X_test = torch.stack(test_data)
-        self.y_true = torch.stack(test_labels)
-
-        return self.train_loader, self.valid_loader, self.test_loader
-
-    def train(self, epochs=50, batch_size=32, learning_rate=0.001, weight_decay=0.0001,
-              use_hyperparameter_tuning=False, early_stopping_patience=10):
-        """
-        Train the model on the preprocessed dataset with optional hyperparameter tuning.
-
-        :param epochs: number of training epochs
-        :param batch_size: size of each training batch
-        :param learning_rate: learning rate for optimizer
-        :param weight_decay: L2 regularization term
-        :param use_hyperparameter_tuning: whether to use grid search for hyperparameter tuning
-        :param early_stopping_patience: number of epochs to wait before early stopping
-        :return: trained model and training history
-        """
-        if self.train_loader is None or self.valid_loader is None:
-            # Create data loaders if not already done
-            self.data_loader(batch_size=batch_size)
-
-        # Define loss function
-        criterion = nn.CrossEntropyLoss()
-
-        if use_hyperparameter_tuning:
-            print("Starting hyperparameter tuning...")
-            # Define hyperparameter grid
-            param_grid = {
-                'learning_rate': [0.01, 0.001, 0.0001],
-                'weight_decay': [0.1, 0.01, 0.001, 0.0001],
-                'optimizer': ['adam', 'sgd']
-            }
-
-            best_val_loss = float('inf')
-            best_params = {}
-
-            # Iterate over parameter combinations
-            for params in ParameterGrid(param_grid):
-                print(f"Trying parameters: {params}")
-
-                # Reset model weights
-                self.model.apply(self._reset_weights)
-
-                # Configure optimizer based on params
-                if params['optimizer'] == 'adam':
-                    optimizer = optim.Adam(self.model.parameters(),
-                                           lr=params['learning_rate'],
-                                           weight_decay=params['weight_decay'])
-                else:
-                    optimizer = optim.SGD(self.model.parameters(),
-                                          lr=params['learning_rate'],
-                                          weight_decay=params['weight_decay'])
-
-                # Train for a few epochs to evaluate this parameter set
-                eval_epochs = 10  # Reduced number of epochs for hyperparameter search
-                val_loss = self._train_loop(optimizer, criterion, eval_epochs, early_stopping_patience)
-
-                # Update best parameters if this combination is better
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    best_params = params
-
-            print(f"Best parameters found: {best_params}")
-
-            # Reset model and train with best parameters
-            self.model.apply(self._reset_weights)
-
-            # Configure optimizer with best parameters
-            if best_params['optimizer'] == 'adam':
-                optimizer = optim.Adam(self.model.parameters(),
-                                       lr=best_params['learning_rate'],
-                                       weight_decay=best_params['weight_decay'])
-            else:
-                optimizer = optim.SGD(self.model.parameters(),
-                                      lr=best_params['learning_rate'],
-                                      weight_decay=best_params['weight_decay'])
-
-        else:
-            # Use the provided hyperparameters
-            optimizer = optim.Adam(self.model.parameters(),
-                                   lr=learning_rate,
-                                   weight_decay=weight_decay)
-
-        # Train the model with the selected hyperparameters
-        val_loss = self._train_loop(optimizer, criterion, epochs, early_stopping_patience)
-
-        return self.best_model, val_loss
-
-    def _reset_weights(self, m):
-        """Reset model weights for hyperparameter tuning"""
-        if isinstance(m, nn.Linear):
+    @staticmethod
+    def _reset_weights(m):
+        """Reset trainable parameters. Used during Optuna reinitializations."""
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
             m.reset_parameters()
 
-    def _train_loop(self, optimizer, criterion, epochs, early_stopping_patience):
-        """Internal training loop used by the train method"""
-        best_val_loss = float('inf')
-        patience_counter = 0
-        training_history = {'train_loss': [], 'val_loss': []}
+    @staticmethod
+    def _binary_f1(labels: np.ndarray, preds: np.ndarray) -> float:
+        """Compute F1 with positive class = 1."""
+        return f1_score(labels, preds, pos_label=1, average="binary")
 
-        self.model.to(self.device)
+    ###########################################################################
+    #  Sliding window + optional balancing
+    ###########################################################################
+    def preprocessing(
+        self,
+        *,
+        normalize: bool = True,
+        balance: bool = False,
+        balance_strategy: Literal["over", "under"] = "over",
+    ) -> None:
+        """
+        - Use self._df and a fixed window_size=600
+        - Generate (N, window_size, n_vars) shaped data
+        - Label is from the center of the window
+        - Optional normalization / balancing
+        """
+        self._normalize = normalize
+        self._balance = balance
+        self._balance_strategy = balance_strategy
 
-        # Save a copy of the initial model
-        if self.input_size is not None and self.num_classes is not None:
-            self.best_model = MLP(
-                input_size=self.input_size,
-                num_classes=self.num_classes
-            )
-            self.best_model.load_state_dict(self.model.state_dict())
-            self.best_model.to(self.device)
-        else:
-            print("Warning: Could not determine model input/output sizes. Using direct model copy.")
-            self.best_model = copy.deepcopy(self.model)
+        df = self._df.copy()
+        # If your CSV has columns: [Close, High, Low, Open, Volume, Labels]
+        feature_cols = ["Close", "High", "Low", "Open", "Volume"][: self.n_vars]
 
-        for epoch in range(epochs):
-            # Training phase
+        # 1) Optional normalization
+        if normalize:
+            for col in feature_cols:
+                minv = df[col].min()
+                maxv = df[col].max()
+                df[col] = (df[col] - minv) / (maxv - minv + 1e-12)
+
+        # 2) Sliding window
+        X_list = []
+        y_list = []
+        half_w = self.window_size // 2
+        total = len(df)
+
+        for start_idx in range(0, total - self.window_size + 1):
+            end_idx = start_idx + self.window_size
+            window_data = df.iloc[start_idx:end_idx][feature_cols].values  # shape (600, n_vars)
+            center_label_idx = start_idx + half_w
+            label = df.iloc[center_label_idx]["Labels"]
+            X_list.append(window_data)
+            y_list.append(label)
+
+        X = np.array(X_list, dtype=np.float32)  # shape (N, 600, n_vars)
+        y = np.array(y_list, dtype=np.int64)
+
+        # 3) Optional balancing
+        if balance:
+            count_0 = np.sum(y == 0)
+            count_1 = np.sum(y == 1)
+            if count_0 > count_1:
+                maj_label, min_label = 0, 1
+            else:
+                maj_label, min_label = 1, 0
+
+            X_maj = X[y == maj_label]
+            X_min = X[y == min_label]
+
+            if balance_strategy == "over":
+                X_min_resampled = resample(X_min, replace=True, n_samples=len(X_maj), random_state=42)
+                y_min_resampled = np.array([min_label] * len(X_maj), dtype=np.int64)
+                X = np.concatenate([X_maj, X_min_resampled], axis=0)
+                y = np.concatenate([np.full(len(X_maj), maj_label, dtype=np.int64), y_min_resampled], axis=0)
+            elif balance_strategy == "under":
+                X_maj_resampled = resample(X_maj, replace=False, n_samples=len(X_min), random_state=42)
+                y_maj_resampled = np.array([maj_label] * len(X_min), dtype=np.int64)
+                X = np.concatenate([X_maj_resampled, X_min], axis=0)
+                y = np.concatenate([y_maj_resampled, np.full(len(X_min), min_label, dtype=np.int64)], axis=0)
+
+            shuffle_idx = np.random.RandomState(42).permutation(len(X))
+            X = X[shuffle_idx]
+            y = y[shuffle_idx]
+            print("Balanced labels:", np.unique(y, return_counts=True))
+
+        self.dataset = (X, y)
+
+    ###########################################################################
+    #  DataLoader
+    ###########################################################################
+    def data_loader(
+        self,
+        *,
+        batch_size: int = 32,
+        train_ratio: float = 0.7,
+        valid_ratio: float = 0.15,
+        test_ratio: float = 0.15,
+    ):
+        """
+        - Split self.dataset and build DataLoader
+        - Print dataset shape, sample sizes, and example plots (label=0 & label=1)
+        """
+        if self.dataset is None:
+            raise ValueError("Call preprocessing() first")
+
+        X, y = self.dataset
+        N = len(X)
+        print(f"[data_loader] Full dataset shape = {X.shape} (N, {self.window_size}, {self.n_vars})")
+
+        X_tensor = torch.from_numpy(X).float()
+        y_tensor = torch.from_numpy(y).long()
+
+        dataset = TensorDataset(X_tensor, y_tensor)
+        total = len(dataset)
+        tr = int(train_ratio * total)
+        va = int(valid_ratio * total)
+        te = total - tr - va
+
+        train_ds, valid_ds, test_ds = random_split(
+            dataset, [tr, va, te], generator=torch.Generator().manual_seed(42)
+        )
+
+        self.train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        self.valid_loader = DataLoader(valid_ds, batch_size=batch_size, shuffle=False)
+        self.test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+
+        self.X_test = torch.stack([dt[0] for dt in test_ds])  # (test_size, 600, n_vars)
+        self.y_true = torch.stack([dt[1] for dt in test_ds])
+
+        print(f"Train DS size: {tr}")
+        print(f"Valid DS size: {va}")
+        print(f"Test  DS size: {te}")
+
+        # Visualize one label=0 example and one label=1 example from the train set
+        trainX = torch.stack([dt[0] for dt in train_ds])
+        trainY = torch.stack([dt[1] for dt in train_ds])
+
+        self._plot_example_sample(trainX, trainY, label=0, title="Example: label=0 (train)")
+        self._plot_example_sample(trainX, trainY, label=1, title="Example: label=1 (train)")
+
+    def _plot_example_sample(self, X_tensor, Y_tensor, label: int, title: str):
+        """
+        Find a sample with the given label and plot its window's time series (n_vars features).
+        We'll just do plt.close() instead of plt.show() to avoid the Agg warning.
+        """
+        idxs = (Y_tensor == label).nonzero(as_tuple=True)[0]
+        if len(idxs) == 0:
+            print(f"No sample with label={label} found.")
+            return
+
+        sample_idx = idxs[0].item()
+        window = X_tensor[sample_idx].cpu().numpy()  # (600, n_vars)
+        center_idx = window.shape[0] // 2
+
+        self._plot_window(window, center_idx, title=title, save_filename=None)
+
+    def _plot_window(self, window: np.ndarray, center_idx: int, title: str, save_filename: str | None):
+        """
+        Plot a single time-series window (T, C), with the center point highlighted.
+        If save_filename is not None, we save the plot to that file (then close).
+        Otherwise, just close after plotting (no interactive show).
+        """
+        T, C = window.shape
+        x_vals = np.arange(T)
+
+        plt.figure(figsize=(6, 4))
+        for i in range(C):
+            plt.plot(x_vals, window[:, i], label=f"Feature {i}")
+        plt.scatter(center_idx, window[center_idx, 0], color='red', zorder=5, label='Center')
+        plt.title(title)
+        plt.legend()
+        plt.tight_layout()
+
+        if save_filename is not None:
+            plt.savefig(os.path.join(self.result_dir, save_filename))
+        # Always close the figure to avoid memory leaks in batch runs
+        plt.close()
+
+    ###########################################################################
+    #  Training + Validation
+    ###########################################################################
+    def _eval_val(self, model):
+        model.eval()
+        preds = []
+        labels = []
+        with torch.no_grad():
+            for x, y in self.valid_loader:
+                x, y = x.to(self.device), y.to(self.device)
+                outputs = model(x)
+                preds.extend(torch.argmax(outputs, 1).cpu().numpy())
+                labels.extend(y.cpu().numpy())
+        preds = np.array(preds)
+        labels = np.array(labels)
+        acc = accuracy_score(labels, preds)
+        f1 = self._binary_f1(labels, preds)
+        return acc, f1
+
+    def _train_loop(self, optimizer, criterion, epochs, patience):
+        best_loss = float("inf")
+        wait = 0
+        self.best_model = copy.deepcopy(self.model)
+
+        for ep in range(epochs):
             self.model.train()
-            train_loss = 0.0
-
-            for inputs, labels in self.train_loader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
-
-                # Zero the parameter gradients
+            total_loss = 0.0
+            for x, y in self.train_loader:
+                x, y = x.to(self.device), y.to(self.device)
                 optimizer.zero_grad()
+                loss = criterion(self.model(x), y)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item() * x.size(0)
+            avg_loss = total_loss / len(self.train_loader.dataset)
 
-                # Forward pass
-                outputs = self.model(inputs)
-                loss = criterion(outputs, labels)
+            # Validation loss
+            self.model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for x, y in self.valid_loader:
+                    x, y = x.to(self.device), y.to(self.device)
+                    val_loss += criterion(self.model(x), y).item() * x.size(0)
+            val_loss /= len(self.valid_loader.dataset)
 
-                # Backward pass and optimize
+            if val_loss < best_loss:
+                best_loss = val_loss
+                self.best_model.load_state_dict(self.model.state_dict())
+                wait = 0
+            else:
+                wait += 1
+                if wait >= patience:
+                    break
+
+        self.model.load_state_dict(self.best_model.state_dict())
+        return best_loss
+
+    ###########################################################################
+    #  Optuna objective
+    ###########################################################################
+    def _optuna_objective(self, trial):
+        """
+        We do NOT tune window_size (fixed=600).
+        We'll only tune lr, wd, optimizer, and epochs.
+        """
+        lr = trial.suggest_float("lr", 1e-4, 1e-1, log=True)
+        wd = trial.suggest_float("wd", 1e-5, 1e-1, log=True)
+        opt = trial.suggest_categorical("opt", ["adam", "sgd"])
+        epochs = trial.suggest_int("epochs", 20, 60)
+
+        # We keep the same data with window_size=600
+        self.preprocessing(normalize=self._normalize, balance=self._balance, balance_strategy=self._balance_strategy)
+        self.data_loader(batch_size=32)
+
+        # Rebuild the model for each trial
+        self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars, num_classes=self.num_classes).to(self.device)
+        self.model.apply(self._reset_weights)
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = (optim.Adam if opt == "adam" else optim.SGD)(
+            self.model.parameters(), lr=lr, weight_decay=wd
+        )
+        patience = 10
+        best_val_loss = float("inf")
+        wait = 0
+
+        for ep in range(epochs):
+            # Train
+            self.model.train()
+            for x, y in self.train_loader:
+                x, y = x.to(self.device), y.to(self.device)
+                optimizer.zero_grad()
+                loss = criterion(self.model(x), y)
                 loss.backward()
                 optimizer.step()
 
-                train_loss += loss.item() * inputs.size(0)
-
-            train_loss = train_loss / len(self.train_loader.dataset)
-
-            # Validation phase
+            # Validate
             self.model.eval()
-            val_loss = 0.0
-
+            vloss = 0.0
             with torch.no_grad():
-                for inputs, labels in self.valid_loader:
-                    inputs, labels = inputs.to(self.device), labels.to(self.device)
-                    outputs = self.model(inputs)
-                    loss = criterion(outputs, labels)
-                    val_loss += loss.item() * inputs.size(0)
+                for x, y in self.valid_loader:
+                    x, y = x.to(self.device), y.to(self.device)
+                    vloss += criterion(self.model(x), y).item() * x.size(0)
+            vloss /= len(self.valid_loader.dataset)
 
-            val_loss = val_loss / len(self.valid_loader.dataset)
-
-            # Save history
-            training_history['train_loss'].append(train_loss)
-            training_history['val_loss'].append(val_loss)
-
-            # Print training progress
-            if (epoch + 1) % 5 == 0 or epoch == 0:
-                print(f'Epoch {epoch + 1}/{epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
-
-            # Check for early stopping
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                # Save the best model
-                self.best_model.load_state_dict(self.model.state_dict())
-                patience_counter = 0
+            acc, f1 = self._eval_val(self.model)
+            if self._opt_metric == "loss":
+                metric = vloss
+            elif self._opt_metric == "accuracy":
+                metric = acc
             else:
-                patience_counter += 1
-                if patience_counter >= early_stopping_patience:
-                    print(f'Early stopping triggered after {epoch + 1} epochs')
+                metric = f1
+
+            trial.report(metric, ep)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+
+            if vloss < best_val_loss:
+                best_val_loss = vloss
+                wait = 0
+            else:
+                wait += 1
+                if wait >= patience:
                     break
 
-        # Restore the best model
-        self.model.load_state_dict(self.best_model.state_dict())
+        return metric
 
-        return best_val_loss
+    ###########################################################################
+    #  Public train
+    ###########################################################################
+    def train(
+        self,
+        *,
+        epochs: int = 50,
+        batch_size: int = 32,
+        learning_rate: float = 1e-3,
+        weight_decay: float = 1e-4,
+        use_hpo: bool = False,
+        n_trials: int = 30,
+        optimize_metric: str = "loss",
+        patience: int = 10,
+        normalize: bool = True,
+        balance: bool = False,
+        balance_strategy: Literal["over", "under"] = "over",
+    ):
+        """
+        Main method to train the model. If use_hpo=True, we will run Optuna search
+        (excluding window_size, which is now fixed at 600).
+        """
+        self._opt_metric = optimize_metric.lower()
+        self._normalize = normalize
+        self._balance = balance
+        self._balance_strategy = balance_strategy
 
+        if use_hpo:
+            direction = "minimize" if self._opt_metric == "loss" else "maximize"
+            study = optuna.create_study(direction=direction)
+            study.optimize(self._optuna_objective, n_trials=n_trials)
+            best = study.best_params
+            print("Optuna best params:", best)
+
+            # Save best hyperparams to a text file
+            with open(os.path.join(self.result_dir, "optuna_best_params.txt"), "w") as f:
+                f.write(f"Best hyperparams:\n{best}\n")
+                # Also store the best value
+                f.write(f"\nBest {self._opt_metric}: {study.best_value}\n")
+
+            # Retrain final model with best hyperparams
+            lr = best["lr"]
+            wd = best["wd"]
+            opt = best["opt"]
+            ep = best["epochs"]
+
+            # Rebuild dataset
+            self.preprocessing(normalize=normalize, balance=balance, balance_strategy=balance_strategy)
+            self.data_loader(batch_size=batch_size)
+
+            # Build model
+            self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars, num_classes=self.num_classes).to(self.device)
+
+            optimizer = (optim.Adam if opt == "adam" else optim.SGD)(
+                self.model.parameters(), lr=lr, weight_decay=wd
+            )
+            val_loss = self._train_loop(optimizer, nn.CrossEntropyLoss(), epochs=ep, patience=patience)
+            return self.best_model, val_loss
+
+        else:
+            # No HPO, just train with provided hyperparams
+            self.preprocessing(normalize=normalize, balance=balance, balance_strategy=balance_strategy)
+            self.data_loader(batch_size=batch_size)
+
+            self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars, num_classes=self.num_classes).to(self.device)
+            optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            val_loss = self._train_loop(optimizer, nn.CrossEntropyLoss(), epochs=epochs, patience=patience)
+            return self.best_model, val_loss
+
+    ###########################################################################
+    #  Evaluate
+    ###########################################################################
     def evaluate(self):
         """
-        Evaluate the model on the test dataset.
-        :return: dictionary containing evaluation metrics (accuracy, F1 score, confusion matrix)
+        Evaluate on test set. Save confusion matrix and, for each confusion-matrix cell (TN, FP, FN, TP),
+        save one example window plot if available.
         """
         if self.test_loader is None:
-            raise ValueError("Test data not loaded. Call data_loader() first.")
+            raise ValueError("Must call data_loader() before evaluate().")
 
         self.model.eval()
-        self.model.to(self.device)
-
-        all_preds = []
-        all_labels = []
-
+        preds = []
+        labels = []
         with torch.no_grad():
-            for inputs, labels in self.test_loader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+            for x, y in self.test_loader:
+                x, y = x.to(self.device), y.to(self.device)
+                logits = self.model(x)
+                preds.extend(torch.argmax(logits, 1).cpu().numpy())
+                labels.extend(y.cpu().numpy())
 
-                # Forward pass
-                outputs = self.model(inputs)
-                _, preds = torch.max(outputs, 1)
+        preds = np.array(preds)
+        labels = np.array(labels)
+        acc = accuracy_score(labels, preds)
+        f1 = self._binary_f1(labels, preds)
 
-                # Store predictions and true labels
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
+        self.confusion_mat = confusion_matrix(labels, preds)
+        print(f"Test Accuracy: {acc:.4f} | F1 (pos=1): {f1:.4f}")
 
-        # Convert lists to numpy arrays
-        all_preds = np.array(all_preds)
-        all_labels = np.array(all_labels)
+        # Save confusion matrix figure
+        plt.figure(figsize=(4, 3))
+        sns.heatmap(self.confusion_mat, annot=True, cmap="Blues", fmt="d",
+                    xticklabels=[0, 1], yticklabels=[0, 1])
+        plt.xlabel("Predicted")
+        plt.ylabel("True")
+        plt.title("Confusion Matrix")
+        plt.tight_layout()
 
-        # Store for visualization
-        self.y_pred = all_preds
+        cm_path = os.path.join(self.result_dir, "confusion_matrix.png")
+        plt.savefig(cm_path)
+        plt.close()
+        print(f"Confusion matrix saved to: {cm_path}")
 
-        # Calculate metrics
-        accuracy = accuracy_score(all_labels, all_preds)
-        f1 = f1_score(all_labels, all_preds, average='weighted')
-        self.confusion_mat = confusion_matrix(all_labels, all_preds)
+        # For each cell (TN, FP, FN, TP), pick one example (if any) and plot
+        X_test_np = self.X_test.cpu().numpy()  # shape (N_test, 600, n_vars)
 
-        # Print metrics
-        print(f"\nEvaluation Metrics:")
-        print(f"Accuracy: {accuracy:.4f}")
-        print(f"F1 Score: {f1:.4f}")
+        tn_idx = np.where((labels == 0) & (preds == 0))[0]
+        fp_idx = np.where((labels == 0) & (preds == 1))[0]
+        fn_idx = np.where((labels == 1) & (preds == 0))[0]
+        tp_idx = np.where((labels == 1) & (preds == 1))[0]
 
-        # Print confusion matrix
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(self.confusion_mat, annot=True, fmt='d', cmap='Blues',
-                    xticklabels=['Class 0', 'Class 1'],
-                    yticklabels=['Class 0', 'Class 1'])
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
-        plt.title('Confusion Matrix')
-        plt.show()
-
-        return {
-            'accuracy': accuracy,
-            'f1_score': f1,
-            'confusion_matrix': self.confusion_mat
+        cell_mapping = {
+            "TN": tn_idx,
+            "FP": fp_idx,
+            "FN": fn_idx,
+            "TP": tp_idx
         }
 
-    def visualization(self):
-        """
-        Visualize examples of TP, FP, TN, FN cases from the test set.
-        Creates line plots for time series with arrow marking the prediction point.
-        """
-        if self.y_pred is None or self.X_test is None or self.y_true is None:
-            raise ValueError("Evaluation not performed. Call evaluate() first.")
-
-        # Convert tensors to numpy if needed
-        if isinstance(self.X_test, torch.Tensor):
-            X_test_np = self.X_test.cpu().numpy()
-        else:
-            X_test_np = self.X_test
-
-        if isinstance(self.y_true, torch.Tensor):
-            y_true_np = self.y_true.cpu().numpy()
-        else:
-            y_true_np = self.y_true
-
-        # Find indices for TP, FP, TN, FN
-        tp_indices = np.where((y_true_np == 1) & (self.y_pred == 1))[0]
-        fp_indices = np.where((y_true_np == 0) & (self.y_pred == 1))[0]
-        tn_indices = np.where((y_true_np == 0) & (self.y_pred == 0))[0]
-        fn_indices = np.where((y_true_np == 1) & (self.y_pred == 0))[0]
-
-        # Check if we have examples for each category
-        categories_available = {
-            'TP': len(tp_indices) > 0,
-            'FP': len(fp_indices) > 0,
-            'TN': len(tn_indices) > 0,
-            'FN': len(fn_indices) > 0
-        }
-
-        missing_categories = [cat for cat, available in categories_available.items() if not available]
-        if missing_categories:
-            print(f"Warning: Not enough examples for categories: {', '.join(missing_categories)}")
-
-        # Define feature names
-        feature_names = ['Close', 'High', 'Low', 'Open', 'Volume']
-
-        # Get original time series data - this requires access to the original dataset
-        # We'll need to import pandas and load the data
-        try:
-            # Load the original dataset to get time context
-            if self.save_path and os.path.exists(self.save_path):
-                full_data = pd.read_csv(self.save_path)
+        for name, arr in cell_mapping.items():
+            if len(arr) > 0:
+                ex_index = arr[0]
+                window = X_test_np[ex_index]  # shape (600, n_vars)
+                center_idx = window.shape[0] // 2
+                title = f"Example: {name} (true={labels[ex_index]}, pred={preds[ex_index]})"
+                filename = f"example_{name}.png"
+                self._plot_window(window, center_idx, title, save_filename=filename)
+                print(f"{name} example saved to: {os.path.join(self.result_dir, filename)}")
             else:
-                print("Warning: Original dataset not found. Using test samples directly.")
-                full_data = None
+                print(f"No example for {name} in test set.")
 
-            # Create a figure for visualization - 2x2 grid for TP, FP, TN, FN
-            fig, axes = plt.subplots(2, 2, figsize=(20, 15))
-            fig.suptitle('Time Series Visualization by Category', fontsize=18)
-
-            # Define categories to plot
-            categories = [
-                ('TP (True Positive)', tp_indices, 0, 0),
-                ('FP (False Positive)', fp_indices, 0, 1),
-                ('TN (True Negative)', tn_indices, 1, 0),
-                ('FN (False Negative)', fn_indices, 1, 1)
-            ]
-
-            # Function to get time series context for a test example
-            def get_time_series_context(idx, context_size=30):
-                """
-                Get time series context around the test example.
-                For simplicity, creates synthetic time series if original data not available.
-
-                Args:
-                    idx: Index of the test example
-                    context_size: Number of time steps to include in context (half before, half after)
-
-                Returns:
-                    time_series_data: Dictionary of feature time series
-                """
-                # If we can locate the example in the original dataset
-                if full_data is not None:
-                    # Here we would need to map the test index back to the original dataset
-                    # This is a simplification - in practice you need a proper mapping
-                    ts_data = {}
-
-                    # Create a time window around the point
-                    # In a real implementation, you'd extract the proper time window from the dataset
-                    # This is just a placeholder approach
-                    for i, feature in enumerate(feature_names):
-                        # Extract sample value for this feature
-                        sample_value = X_test_np[idx][i]
-
-                        # Generate synthetic time series around this point
-                        # In a real implementation, you'd use the actual time series data
-                        ts = np.linspace(sample_value * 0.8, sample_value * 1.2, context_size)
-                        # Make the center point the actual value
-                        mid_point = context_size // 2
-                        ts[mid_point] = sample_value
-                        ts_data[feature] = ts
-
-                    return ts_data
-                else:
-                    # Create synthetic time series if original data not available
-                    ts_data = {}
-                    for i, feature in enumerate(feature_names):
-                        if i < len(X_test_np[idx]):
-                            # Extract sample value for this feature
-                            sample_value = X_test_np[idx][i]
-
-                            # Generate synthetic time series around this point
-                            ts = np.random.normal(sample_value, sample_value * 0.1, context_size)
-                            # Make the center point the actual value
-                            mid_point = context_size // 2
-                            ts[mid_point] = sample_value
-                            ts_data[feature] = ts
-
-                    return ts_data
-
-            # Plot each category
-            for category, indices, row, col in categories:
-                ax = axes[row, col]
-                ax.set_title(category, fontsize=14)
-
-                if len(indices) > 0:
-                    # Get the first example for this category
-                    idx = indices[0]
-
-                    # Get time series context
-                    time_context = 30  # Number of time steps
-                    ts_data = get_time_series_context(idx, time_context)
-
-                    # Time steps array
-                    time_steps = np.arange(time_context)
-                    middle_point = time_context // 2
-
-                    # Plot each feature as a separate line
-                    for feature, values in ts_data.items():
-                        line = ax.plot(time_steps, values, label=feature, linewidth=2)
-
-                        # Mark the prediction point with an arrow
-                        ax.annotate('',
-                                    xy=(middle_point, values[middle_point]),
-                                    xytext=(middle_point, values[middle_point] * 1.15),
-                                    arrowprops=dict(facecolor='red', shrink=0.05, width=2, headwidth=8),
-                                    horizontalalignment='center')
-
-                    # Add vertical line at prediction point
-                    ax.axvline(x=middle_point, color='gray', linestyle='--', alpha=0.7)
-
-                    # Configure the plot
-                    ax.set_xlabel('Time Step', fontsize=12)
-                    ax.set_ylabel('Value', fontsize=12)
-                    ax.legend(loc='upper right')
-                    ax.grid(True, linestyle='--', alpha=0.7)
-
-                    # Add annotation for true and predicted labels
-                    label_text = f"True: {y_true_np[idx]}, Pred: {self.y_pred[idx]}"
-                    ax.text(0.05, 0.95, label_text, transform=ax.transAxes,
-                            fontsize=12, fontweight='bold', verticalalignment='top')
-                else:
-                    ax.text(0.5, 0.5, f'No {category} examples available',
-                            horizontalalignment='center', verticalalignment='center',
-                            transform=ax.transAxes, fontsize=14)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.97])
-            plt.show()
-
-            # Create a table with examples
-            print("\nExample cases table:")
-            print("-" * 80)
-            print(
-                f"{'Category':<15} | {'True Label':<10} | {'Predicted':<10} | {'Features (Close, High, Low, Open, Volume)'}")
-            print("-" * 80)
-
-            category_data = [
-                ("TP", tp_indices),
-                ("FP", fp_indices),
-                ("TN", tn_indices),
-                ("FN", fn_indices)
-            ]
-
-            for category, indices in category_data:
-                if len(indices) > 0:
-                    idx = indices[0]
-                    true_label = y_true_np[idx]
-                    pred_label = self.y_pred[idx]
-
-                    # Format feature values
-                    feature_values = X_test_np[idx]
-                    if len(feature_values) >= 5:
-                        feature_str = ", ".join([f"{feature_values[i]:.4f}" for i in range(5)])
-                    else:
-                        feature_str = "Data shape doesn't match expected features"
-
-                    print(f"{category:<15} | {true_label:<10} | {pred_label:<10} | {feature_str}")
-                else:
-                    print(f"{category:<15} | {'N/A':<10} | {'N/A':<10} | {'No examples available'}")
-
-            print("-" * 80)
-
-            # Return information about examples found
-            return {
-                'tp_example': tp_indices[0] if len(tp_indices) > 0 else None,
-                'fp_example': fp_indices[0] if len(fp_indices) > 0 else None,
-                'tn_example': tn_indices[0] if len(tn_indices) > 0 else None,
-                'fn_example': fn_indices[0] if len(fn_indices) > 0 else None
-            }
-
-        except Exception as e:
-            print(f"Error during visualization: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
-            # Fall back to simple feature visualization
-            plt.figure(figsize=(12, 8))
-            plt.suptitle('Feature Values by Category', fontsize=16)
-
-            # Plot available categories
-            available_cats = []
-            available_values = []
-
-            for cat_name, indices in [("TP", tp_indices), ("FP", fp_indices),
-                                      ("TN", tn_indices), ("FN", fn_indices)]:
-                if len(indices) > 0:
-                    available_cats.append(cat_name)
-                    available_values.append(X_test_np[indices[0]])
-
-            # If we have any available categories
-            if available_cats:
-                # Create a bar chart showing feature values for each category
-                x = np.arange(len(feature_names))
-                width = 0.8 / len(available_cats)
-
-                for i, (cat, values) in enumerate(zip(available_cats, available_values)):
-                    plt.bar(x + i * width - 0.4 + width / 2, values[:len(feature_names)],
-                            width=width, label=cat)
-
-                plt.xlabel('Features')
-                plt.ylabel('Values')
-                plt.xticks(x, feature_names)
-                plt.legend()
-                plt.grid(True, linestyle='--', alpha=0.7)
-                plt.show()
-
-            return {
-                'tp_example': tp_indices[0] if len(tp_indices) > 0 else None,
-                'fp_example': fp_indices[0] if len(fp_indices) > 0 else None,
-                'tn_example': tn_indices[0] if len(tn_indices) > 0 else None,
-                'fn_example': fn_indices[0] if len(fn_indices) > 0 else None
-            }
+        return {"accuracy": acc, "f1": f1}
 
 
-if "__main__" == __name__:
-    # Example usage
-    model = MLP(input_size=5, num_classes=2)  # Adjust input size and number of classes as needed
-    # file_path = "../Dataset/ftse_minute_data_daily.csv"
-    # save_path = "../Dataset/ftse_minute_data_daily_labelled.csv"
-    #
-    # pipeline = Pipeline(model, file_path, save_path)
-    pipeline = Pipeline(model, file_path="../Dataset/ftse_minute_data_daily_labelled.csv")
-    pipeline.preprocessing(label_type=0, window_size=600, normalize=True)
-    pipeline.data_loader(batch_size=32)
-    pipeline.train(epochs=50, use_hyperparameter_tuning=False)
-    pipeline.evaluate()
-    pipeline.visualization()
+###############################################################################
+# Example usage
+###############################################################################
+if __name__ == "__main__":
+    # 1) Update your CSV path
+    CSV_FILE_PATH = "../Dataset/ftse_minute_data_daily_labelled.csv"
+
+    # 2) Pick your model class. For example:
+    # model_class = ResNet_baseline.ResNet
+    # or model_class = CNN_baseline.CNN
+    # or MLP_baseline.MLP, etc.
+    model_class = CNN_baseline.CNN
+
+    # 3) Create pipeline
+    pipeline = Pipeline(
+        model_class=model_class,
+        file_path=CSV_FILE_PATH,
+        n_vars=5,            # e.g., columns: Close, High, Low, Open, Volume
+        num_classes=2        # binary classification
+    )
+
+    # 4) Train (optionally with HPO). window_size=600 is fixed; only lr/wd/etc. are tuned.
+    pipeline.train(
+        use_hpo=True,
+        n_trials=5,
+        optimize_metric="f1",
+        epochs=40,
+        batch_size=32,
+        patience=10,
+        normalize=True,
+        balance=True,
+        balance_strategy="over"
+    )
+
+    # 5) Final evaluation on test set: confusion matrix + up to 4 example plots
+    results = pipeline.evaluate()
+    print("Final evaluation results:", results)
