@@ -219,7 +219,7 @@ class PrototypeFeatureExtractor:
         计算原型特征
         Args:
             metric (str): 距离度量方式，默认使用欧氏距离
-            - 可选 'euclidean', 'dtw', 'cosine', 'mahalanobis'
+            - 可选 'euclidean', 'dtw', 'cosine'
         Returns:
             torch.Tensor: 原型特征，形状为 (B, num_prototypes, C)
         """
@@ -232,9 +232,6 @@ class PrototypeFeatureExtractor:
         elif metric == 'cosine':
             # 计算余弦相似度
             return self._compute_cosine_features()
-        elif metric == 'mahalanobis':
-            # 计算马氏距离
-            return self._compute_mahalanobis_features()
         else:
             raise ValueError(f"Unsupported metric: {metric}")
 
@@ -288,21 +285,6 @@ class PrototypeFeatureExtractor:
                         self.prototypes[j, :, k],
                         dim=0
                     )
-        return features
-
-    def _compute_mahalanobis_features(self):
-        # for each feature in each time series, compute one mahalanobis distance to each prototype
-        # return shape (B, num_prototypes, C)
-        B, T, C = self.time_series.shape
-        num_prototypes = self.prototypes.shape[0]
-        features = torch.zeros(B, num_prototypes, C)
-        for i in range(B):
-            for j in range(num_prototypes):
-                for k in range(C):
-                    # 修复：改成 self.prototypes[j, :, k]
-                    diff = self.time_series[i, :, k] - self.prototypes[j, :, k]
-                    cov_inv = torch.linalg.inv(torch.cov(self.time_series[i, :, k].numpy()))
-                    features[i, j, k] = torch.sqrt(torch.matmul(torch.matmul(diff.T, cov_inv), diff))
         return features
 
 

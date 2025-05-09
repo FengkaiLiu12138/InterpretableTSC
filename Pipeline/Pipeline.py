@@ -652,27 +652,31 @@ if __name__ == "__main__":
     # print("Baseline LSTM results:", results)
 
     # ========== 示例2: 使用 PrototypeBasedModel ==========
-    prototype_pipeline = Pipeline(
-        model_class=PrototypeBasedModel,  # 你的自定义原型模型
-        file_path=CSV_FILE_PATH,
-        n_vars=5,
-        num_classes=2,
-        result_dir="../Result/PrototypeModel",
-        use_prototype=True,              # 启用原型模式
-        num_prototypes=10,                # 原型个数
-        prototype_selection_type='k-means',  # 原型选择方式
-        prototype_distance_metric='euclidean'
-    )
+    selection_types = ["random", "k-means", "gmm"]
+    distance_metrics = ["euclidean", "cosine", "dtw"]
+    for selection_type in selection_types:
+        for distance_metric in distance_metrics:
+            prototype_pipeline = Pipeline(
+                model_class=PrototypeBasedModel,  # 你的自定义原型模型
+                file_path=CSV_FILE_PATH,
+                n_vars=5,
+                num_classes=2,
+                result_dir=f"../Result/PrototypeModel/{selection_type}_{distance_metric}",
+                use_prototype=True,              # 启用原型模式
+                num_prototypes=10,                # 原型个数
+                prototype_selection_type=selection_type,  # 原型选择方式
+                prototype_distance_metric=distance_metric
+            )
 
-    prototype_pipeline.train(
-        use_hpo=True,   # 同样可以开启 HPO
-        epochs=10,
-        batch_size=32,
-        patience=5,
-        normalize=True,
-        balance=True,
-        balance_strategy="over",
-        optimize_metric="f1"
-    )
-    proto_results = prototype_pipeline.evaluate()
-    print("Prototype model results:", proto_results)
+            prototype_pipeline.train(
+                use_hpo=True,   # 同样可以开启 HPO
+                epochs=10,
+                batch_size=32,
+                patience=5,
+                normalize=True,
+                balance=True,
+                balance_strategy="over",
+                optimize_metric="f1"
+            )
+            proto_results = prototype_pipeline.evaluate()
+            print("Prototype model results:", proto_results)
