@@ -18,7 +18,7 @@ class FCN(nn.Module):
       - 若 kernel_size=5 并想要 "same" padding，需要手动指定 padding=2 (或使用 padding="same" 需 PyTorch>=2.0)
     """
 
-    def __init__(self, n_vars: int, num_classes: int):
+    def __init__(self, window_size:int, n_vars: int, num_classes: int):
         """
         Args:
             n_vars (int): 每个时间步的特征数 (channels), 例如 5

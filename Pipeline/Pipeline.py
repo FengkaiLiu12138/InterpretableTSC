@@ -14,12 +14,11 @@ from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 from sklearn.utils import resample
 
 import matplotlib
-matplotlib.use("Agg")  # Non-interactive backend; figures will be saved, not shown.
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import optuna
 
-# Example imports for your baseline models.
 from BaselineModel import (
     ResNet_baseline,
     CNN_baseline,
@@ -27,6 +26,9 @@ from BaselineModel import (
     MLP_baseline,
     FCN_baseline
 )
+from PrototypeBasedModel import PrototypeBasedModel
+from PrototypeBasedModel.PrototypeSelection import PrototypeSelector
+from PrototypeBasedModel.PrototypeBasedModel import PrototypeBasedModel, PrototypeFeatureExtractor
 
 
 ###############################################################################
@@ -563,7 +565,7 @@ if __name__ == "__main__":
     # model_class = ResNet_baseline.ResNet
     # or model_class = CNN_baseline.CNN
     # or MLP_baseline.MLP, etc.
-    model_class = CNN_baseline.CNN
+    model_class = LSTM_baseline.LSTM
 
     # 3) Create pipeline
     pipeline = Pipeline(
