@@ -14,6 +14,7 @@ from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 from sklearn.utils import resample
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -43,12 +44,12 @@ class Pipeline:
     """
 
     def __init__(
-        self,
-        model_class,
-        file_path: str,
-        n_vars: int,
-        num_classes: int,
-        result_dir: str | None = None
+            self,
+            model_class,
+            file_path: str,
+            n_vars: int,
+            num_classes: int,
+            result_dir: str | None = None
     ):
         """
         Args:
@@ -120,11 +121,11 @@ class Pipeline:
     #  Sliding window + optional balancing
     ###########################################################################
     def preprocessing(
-        self,
-        *,
-        normalize: bool = True,
-        balance: bool = False,
-        balance_strategy: Literal["over", "under"] = "over",
+            self,
+            *,
+            normalize: bool = True,
+            balance: bool = False,
+            balance_strategy: Literal["over", "under"] = "over",
     ) -> None:
         """
         - Use self._df and a fixed window_size=600
@@ -198,12 +199,12 @@ class Pipeline:
     #  DataLoader
     ###########################################################################
     def data_loader(
-        self,
-        *,
-        batch_size: int = 32,
-        train_ratio: float = 0.7,
-        valid_ratio: float = 0.15,
-        test_ratio: float = 0.15,
+            self,
+            *,
+            batch_size: int = 32,
+            train_ratio: float = 0.7,
+            valid_ratio: float = 0.15,
+            test_ratio: float = 0.15,
     ):
         """
         - Split self.dataset and build DataLoader
@@ -360,7 +361,8 @@ class Pipeline:
         self.data_loader(batch_size=32)
 
         # Rebuild the model for each trial
-        self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars, num_classes=self.num_classes).to(self.device)
+        self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars,
+                                      num_classes=self.num_classes).to(self.device)
         self.model.apply(self._reset_weights)
 
         criterion = nn.CrossEntropyLoss()
@@ -416,19 +418,19 @@ class Pipeline:
     #  Public train
     ###########################################################################
     def train(
-        self,
-        *,
-        epochs: int = 50,
-        batch_size: int = 32,
-        learning_rate: float = 1e-3,
-        weight_decay: float = 1e-4,
-        use_hpo: bool = False,
-        n_trials: int = 30,
-        optimize_metric: str = "loss",
-        patience: int = 10,
-        normalize: bool = True,
-        balance: bool = False,
-        balance_strategy: Literal["over", "under"] = "over",
+            self,
+            *,
+            epochs: int = 50,
+            batch_size: int = 32,
+            learning_rate: float = 1e-3,
+            weight_decay: float = 1e-4,
+            use_hpo: bool = False,
+            n_trials: int = 30,
+            optimize_metric: str = "loss",
+            patience: int = 10,
+            normalize: bool = True,
+            balance: bool = False,
+            balance_strategy: Literal["over", "under"] = "over",
     ):
         """
         Main method to train the model. If use_hpo=True, we will run Optuna search
@@ -463,7 +465,8 @@ class Pipeline:
             self.data_loader(batch_size=batch_size)
 
             # Build model
-            self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars, num_classes=self.num_classes).to(self.device)
+            self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars,
+                                          num_classes=self.num_classes).to(self.device)
 
             optimizer = (optim.Adam if opt == "adam" else optim.SGD)(
                 self.model.parameters(), lr=lr, weight_decay=wd
@@ -476,7 +479,8 @@ class Pipeline:
             self.preprocessing(normalize=normalize, balance=balance, balance_strategy=balance_strategy)
             self.data_loader(batch_size=batch_size)
 
-            self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars, num_classes=self.num_classes).to(self.device)
+            self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars,
+                                          num_classes=self.num_classes).to(self.device)
             optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
             val_loss = self._train_loop(optimizer, nn.CrossEntropyLoss(), epochs=epochs, patience=patience)
             return self.best_model, val_loss
@@ -571,8 +575,8 @@ if __name__ == "__main__":
     pipeline = Pipeline(
         model_class=model_class,
         file_path=CSV_FILE_PATH,
-        n_vars=5,            # e.g., columns: Close, High, Low, Open, Volume
-        num_classes=2        # binary classification
+        n_vars=5,  # e.g., columns: Close, High, Low, Open, Volume
+        num_classes=2  # binary classification
     )
 
     # 4) Train (optionally with HPO). window_size=600 is fixed; only lr/wd/etc. are tuned.
