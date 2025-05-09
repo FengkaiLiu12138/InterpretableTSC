@@ -14,12 +14,13 @@ from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 from sklearn.utils import resample
 
 import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import optuna
 
+# ============ Baseline Models (示例) ============
+# 这里只是示例导入，实际需确认你项目结构中对应模块路径
 from BaselineModel import (
     ResNet_baseline,
     CNN_baseline,
@@ -27,9 +28,11 @@ from BaselineModel import (
     MLP_baseline,
     FCN_baseline
 )
+
+# ============ Prototype Models (示例) ============
+# 这里只是示例导入，实际需确认你项目结构中对应模块路径
 from PrototypeBasedModel import PrototypeBasedModel
-from PrototypeBasedModel.PrototypeSelection import PrototypeSelector
-from PrototypeBasedModel.PrototypeBasedModel import PrototypeBasedModel, PrototypeFeatureExtractor
+from PrototypeBasedModel.PrototypeBasedModel import PrototypeBasedModel, PrototypeFeatureExtractor, PrototypeSelector
 
 
 ###############################################################################
@@ -49,22 +52,31 @@ class Pipeline:
             file_path: str,
             n_vars: int,
             num_classes: int,
-            result_dir: str | None = None
+            result_dir: str | None = None,
+            # 新增：原型模型相关参数
+            use_prototype: bool = False,
+            num_prototypes: int = 8,
+            prototype_selection_type: str = 'random',
+            prototype_distance_metric: str = 'euclidean'
     ):
         """
         Args:
-            model_class: The model class (e.g. CNN_baseline.CNN), NOT an instance
+            model_class: The model class (e.g. ResNet_baseline.ResNet, or PrototypeBasedModel)
             file_path: Path to your CSV
-            n_vars: Number of features (e.g. 5 for [Close, High, Low, Open, Volume])
+            n_vars: Number of features
             num_classes: Number of classes (2 for binary)
-            result_dir: Where to store figures & results. If None, auto-named by model_class
+            result_dir: Where to store figures & results
+            use_prototype: 是否启用原型模式
+            num_prototypes: 原型个数
+            prototype_selection_type: 原型选择方式 ('random', 'k-means', 'gmm')
+            prototype_distance_metric: 距离度量 ('euclidean', 'dtw', 'cosine', 'mahalanobis')
         """
         self.model_class = model_class
         self.file_path = file_path
         self.n_vars = n_vars
         self.num_classes = num_classes
 
-        # The window_size is fixed at 600
+        # The window_size is fixed at 600 for sliding-window usage
         self.window_size = 600
         self.model = None
 
@@ -92,6 +104,12 @@ class Pipeline:
         self.y_true = None
         self.confusion_mat = None
         self._opt_metric = "loss"
+
+        # 原型相关参数
+        self.use_prototype = use_prototype
+        self.num_prototypes = num_prototypes
+        self.prototype_selection_type = prototype_selection_type
+        self.prototype_distance_metric = prototype_distance_metric
 
         # For repeated usage in Optuna, etc.
         self._balance = False
@@ -138,7 +156,6 @@ class Pipeline:
         self._balance_strategy = balance_strategy
 
         df = self._df.copy()
-        # If your CSV has columns: [Close, High, Low, Open, Volume, Labels]
         feature_cols = ["Close", "High", "Low", "Open", "Volume"][: self.n_vars]
 
         # 1) Optional normalization
@@ -193,6 +210,28 @@ class Pipeline:
             y = y[shuffle_idx]
             print("Balanced labels:", np.unique(y, return_counts=True))
 
+        # 如果启用原型模式，则选出若干原型并进行特征提取
+        if self.use_prototype:
+            print(f"[Prototype Mode] Selecting {self.num_prototypes} prototypes via '{self.prototype_selection_type}' ...")
+            selector = PrototypeSelector(X, y, window_size=self.window_size)
+            prototypes, proto_labels, remaining_data, remaining_labels = selector.select_prototypes(
+                num_prototypes=self.num_prototypes,
+                selection_type=self.prototype_selection_type
+            )
+            print(f"Prototypes shape = {prototypes.shape}, labels = {proto_labels.shape}")
+            print(f"Remaining shape  = {remaining_data.shape}, labels = {remaining_labels.shape}")
+
+            # 将剩余样本转为 (N, num_prototypes, n_vars) 的距离/相似度特征
+            time_series_t = torch.from_numpy(remaining_data)   # (N_rem, 600, n_vars)
+            prototypes_t  = torch.from_numpy(prototypes)       # (num_prototypes, 600, n_vars)
+
+            extractor = PrototypeFeatureExtractor(time_series_t, prototypes_t)
+            feats_t = extractor.compute_prototype_features(metric=self.prototype_distance_metric)
+            X = feats_t.numpy()
+            y = remaining_labels
+
+            print(f"[Prototype Mode] After feature extraction, X shape = {X.shape}, y shape = {y.shape}")
+
         self.dataset = (X, y)
 
     ###########################################################################
@@ -208,14 +247,21 @@ class Pipeline:
     ):
         """
         - Split self.dataset and build DataLoader
-        - Print dataset shape, sample sizes, and example plots (label=0 & label=1)
+        - Print dataset shape, sample sizes
+        - Optional example plots
         """
         if self.dataset is None:
             raise ValueError("Call preprocessing() first")
 
         X, y = self.dataset
         N = len(X)
-        print(f"[data_loader] Full dataset shape = {X.shape} (N, {self.window_size}, {self.n_vars})")
+
+        if self.use_prototype:
+            # X -> (N, num_prototypes, n_vars)
+            print(f"[data_loader] Full dataset shape = {X.shape} (N, {self.num_prototypes}, {self.n_vars})")
+        else:
+            # X -> (N, 600, n_vars)
+            print(f"[data_loader] Full dataset shape = {X.shape} (N, {self.window_size}, {self.n_vars})")
 
         X_tensor = torch.from_numpy(X).float()
         y_tensor = torch.from_numpy(y).long()
@@ -234,42 +280,32 @@ class Pipeline:
         self.valid_loader = DataLoader(valid_ds, batch_size=batch_size, shuffle=False)
         self.test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-        self.X_test = torch.stack([dt[0] for dt in test_ds])  # (test_size, 600, n_vars)
+        self.X_test = torch.stack([dt[0] for dt in test_ds])
         self.y_true = torch.stack([dt[1] for dt in test_ds])
 
         print(f"Train DS size: {tr}")
         print(f"Valid DS size: {va}")
         print(f"Test  DS size: {te}")
 
-        # Visualize one label=0 example and one label=1 example from the train set
-        trainX = torch.stack([dt[0] for dt in train_ds])
-        trainY = torch.stack([dt[1] for dt in train_ds])
-
-        self._plot_example_sample(trainX, trainY, label=0, title="Example: label=0 (train)")
-        self._plot_example_sample(trainX, trainY, label=1, title="Example: label=1 (train)")
+        # 在 prototype 模式下，X 已是距离/相似度特征，不再可视化原始时序
+        if not self.use_prototype:
+            trainX = torch.stack([dt[0] for dt in train_ds])
+            trainY = torch.stack([dt[1] for dt in train_ds])
+            self._plot_example_sample(trainX, trainY, label=0, title="Example: label=0 (train)")
+            self._plot_example_sample(trainX, trainY, label=1, title="Example: label=1 (train)")
 
     def _plot_example_sample(self, X_tensor, Y_tensor, label: int, title: str):
-        """
-        Find a sample with the given label and plot its window's time series (n_vars features).
-        We'll just do plt.close() instead of plt.show() to avoid the Agg warning.
-        """
         idxs = (Y_tensor == label).nonzero(as_tuple=True)[0]
         if len(idxs) == 0:
             print(f"No sample with label={label} found.")
             return
 
         sample_idx = idxs[0].item()
-        window = X_tensor[sample_idx].cpu().numpy()  # (600, n_vars)
+        window = X_tensor[sample_idx].cpu().numpy()  # shape (600, n_vars)
         center_idx = window.shape[0] // 2
-
         self._plot_window(window, center_idx, title=title, save_filename=None)
 
     def _plot_window(self, window: np.ndarray, center_idx: int, title: str, save_filename: str | None):
-        """
-        Plot a single time-series window (T, C), with the center point highlighted.
-        If save_filename is not None, we save the plot to that file (then close).
-        Otherwise, just close after plotting (no interactive show).
-        """
         T, C = window.shape
         x_vals = np.arange(T)
 
@@ -283,7 +319,6 @@ class Pipeline:
 
         if save_filename is not None:
             plt.savefig(os.path.join(self.result_dir, save_filename))
-        # Always close the figure to avoid memory leaks in batch runs
         plt.close()
 
     ###########################################################################
@@ -320,6 +355,7 @@ class Pipeline:
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item() * x.size(0)
+
             avg_loss = total_loss / len(self.train_loader.dataset)
 
             # Validation loss
@@ -347,22 +383,28 @@ class Pipeline:
     #  Optuna objective
     ###########################################################################
     def _optuna_objective(self, trial):
-        """
-        We do NOT tune window_size (fixed=600).
-        We'll only tune lr, wd, optimizer, and epochs.
-        """
         lr = trial.suggest_float("lr", 1e-4, 1e-1, log=True)
         wd = trial.suggest_float("wd", 1e-5, 1e-1, log=True)
         opt = trial.suggest_categorical("opt", ["adam", "sgd"])
         epochs = trial.suggest_int("epochs", 20, 60)
 
-        # We keep the same data with window_size=600
         self.preprocessing(normalize=self._normalize, balance=self._balance, balance_strategy=self._balance_strategy)
         self.data_loader(batch_size=32)
 
-        # Rebuild the model for each trial
-        self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars,
-                                      num_classes=self.num_classes).to(self.device)
+        # 构造模型时，根据是否继承 PrototypeBasedModel 做区分
+        if issubclass(self.model_class, PrototypeBasedModel):
+            self.model = self.model_class(
+                num_prototypes=self.num_prototypes,
+                n_var=self.n_vars,
+                num_classes=self.num_classes
+            ).to(self.device)
+        else:
+            self.model = self.model_class(
+                window_size=self.window_size,
+                n_vars=self.n_vars,
+                num_classes=self.num_classes
+            ).to(self.device)
+
         self.model.apply(self._reset_weights)
 
         criterion = nn.CrossEntropyLoss()
@@ -451,7 +493,6 @@ class Pipeline:
             # Save best hyperparams to a text file
             with open(os.path.join(self.result_dir, "optuna_best_params.txt"), "w") as f:
                 f.write(f"Best hyperparams:\n{best}\n")
-                # Also store the best value
                 f.write(f"\nBest {self._opt_metric}: {study.best_value}\n")
 
             # Retrain final model with best hyperparams
@@ -460,27 +501,45 @@ class Pipeline:
             opt = best["opt"]
             ep = best["epochs"]
 
-            # Rebuild dataset
             self.preprocessing(normalize=normalize, balance=balance, balance_strategy=balance_strategy)
             self.data_loader(batch_size=batch_size)
 
-            # Build model
-            self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars,
-                                          num_classes=self.num_classes).to(self.device)
+            if issubclass(self.model_class, PrototypeBasedModel):
+                self.model = self.model_class(
+                    num_prototypes=self.num_prototypes,
+                    n_var=self.n_vars,
+                    num_classes=self.num_classes
+                ).to(self.device)
+            else:
+                self.model = self.model_class(
+                    window_size=self.window_size,
+                    n_vars=self.n_vars,
+                    num_classes=self.num_classes
+                ).to(self.device)
 
             optimizer = (optim.Adam if opt == "adam" else optim.SGD)(
                 self.model.parameters(), lr=lr, weight_decay=wd
             )
             val_loss = self._train_loop(optimizer, nn.CrossEntropyLoss(), epochs=ep, patience=patience)
             return self.best_model, val_loss
-
         else:
             # No HPO, just train with provided hyperparams
             self.preprocessing(normalize=normalize, balance=balance, balance_strategy=balance_strategy)
             self.data_loader(batch_size=batch_size)
 
-            self.model = self.model_class(window_size=self.window_size, n_vars=self.n_vars,
-                                          num_classes=self.num_classes).to(self.device)
+            if issubclass(self.model_class, PrototypeBasedModel):
+                self.model = self.model_class(
+                    num_prototypes=self.num_prototypes,
+                    n_var=self.n_vars,
+                    num_classes=self.num_classes
+                ).to(self.device)
+            else:
+                self.model = self.model_class(
+                    window_size=self.window_size,
+                    n_vars=self.n_vars,
+                    num_classes=self.num_classes
+                ).to(self.device)
+
             optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
             val_loss = self._train_loop(optimizer, nn.CrossEntropyLoss(), epochs=epochs, patience=patience)
             return self.best_model, val_loss
@@ -491,7 +550,7 @@ class Pipeline:
     def evaluate(self):
         """
         Evaluate on test set. Save confusion matrix and, for each confusion-matrix cell (TN, FP, FN, TP),
-        save one example window plot if available.
+        save one example window plot if available (only for baseline mode).
         """
         if self.test_loader is None:
             raise ValueError("Must call data_loader() before evaluate().")
@@ -528,70 +587,92 @@ class Pipeline:
         plt.close()
         print(f"Confusion matrix saved to: {cm_path}")
 
-        # For each cell (TN, FP, FN, TP), pick one example (if any) and plot
-        X_test_np = self.X_test.cpu().numpy()  # shape (N_test, 600, n_vars)
+        # 如果是 prototype 模式，则无法直接可视化原始时序
+        if not self.use_prototype:
+            X_test_np = self.X_test.cpu().numpy()  # shape (N_test, 600, n_vars)
 
-        tn_idx = np.where((labels == 0) & (preds == 0))[0]
-        fp_idx = np.where((labels == 0) & (preds == 1))[0]
-        fn_idx = np.where((labels == 1) & (preds == 0))[0]
-        tp_idx = np.where((labels == 1) & (preds == 1))[0]
+            tn_idx = np.where((labels == 0) & (preds == 0))[0]
+            fp_idx = np.where((labels == 0) & (preds == 1))[0]
+            fn_idx = np.where((labels == 1) & (preds == 0))[0]
+            tp_idx = np.where((labels == 1) & (preds == 1))[0]
 
-        cell_mapping = {
-            "TN": tn_idx,
-            "FP": fp_idx,
-            "FN": fn_idx,
-            "TP": tp_idx
-        }
+            cell_mapping = {
+                "TN": tn_idx,
+                "FP": fp_idx,
+                "FN": fn_idx,
+                "TP": tp_idx
+            }
 
-        for name, arr in cell_mapping.items():
-            if len(arr) > 0:
-                ex_index = arr[0]
-                window = X_test_np[ex_index]  # shape (600, n_vars)
-                center_idx = window.shape[0] // 2
-                title = f"Example: {name} (true={labels[ex_index]}, pred={preds[ex_index]})"
-                filename = f"example_{name}.png"
-                self._plot_window(window, center_idx, title, save_filename=filename)
-                print(f"{name} example saved to: {os.path.join(self.result_dir, filename)}")
-            else:
-                print(f"No example for {name} in test set.")
+            for name, arr in cell_mapping.items():
+                if len(arr) > 0:
+                    ex_index = arr[0]
+                    window = X_test_np[ex_index]  # shape (600, n_vars)
+                    center_idx = window.shape[0] // 2
+                    title = f"Example: {name} (true={labels[ex_index]}, pred={preds[ex_index]})"
+                    filename = f"example_{name}.png"
+                    self._plot_window(window, center_idx, title, save_filename=filename)
+                    print(f"{name} example saved to: {os.path.join(self.result_dir, filename)}")
+                else:
+                    print(f"No example for {name} in test set.")
+        else:
+            print("[Prototype Mode] Skipping example window plots, because input is no longer raw time-series.")
 
         return {"accuracy": acc, "f1": f1}
 
 
 ###############################################################################
-# Example usage
+# Example usage (main)
 ###############################################################################
 if __name__ == "__main__":
     # 1) Update your CSV path
     CSV_FILE_PATH = "../Dataset/ftse_minute_data_daily_labelled.csv"
 
-    # 2) Pick your model class. For example:
-    # model_class = ResNet_baseline.ResNet
-    # or model_class = CNN_baseline.CNN
-    # or MLP_baseline.MLP, etc.
-    model_class = LSTM_baseline.LSTM
+    # # ========== 示例1: 使用基线模型 (e.g. LSTM) ==========
+    # model_class = LSTM_baseline.LSTM
+    # pipeline = Pipeline(
+    #     model_class=model_class,
+    #     file_path=CSV_FILE_PATH,
+    #     n_vars=5,  # columns: Close, High, Low, Open, Volume
+    #     num_classes=2,  # binary classification
+    #     result_dir="../Result/LSTM_Baseline",
+    #     use_prototype=False  # 关闭原型模式
+    # )
+    #
+    # pipeline.train(
+    #     use_hpo=False,          # 不使用Optuna
+    #     epochs=10,              # 只跑10个epoch做演示
+    #     batch_size=32,
+    #     patience=5,
+    #     normalize=True,
+    #     balance=True,
+    #     balance_strategy="over",
+    #     optimize_metric="f1"
+    # )
+    # results = pipeline.evaluate()
+    # print("Baseline LSTM results:", results)
 
-    # 3) Create pipeline
-    pipeline = Pipeline(
-        model_class=model_class,
+    # ========== 示例2: 使用 PrototypeBasedModel ==========
+    prototype_pipeline = Pipeline(
+        model_class=PrototypeBasedModel,  # 你的自定义原型模型
         file_path=CSV_FILE_PATH,
-        n_vars=5,  # e.g., columns: Close, High, Low, Open, Volume
-        num_classes=2  # binary classification
+        n_vars=5,
+        num_classes=2,
+        result_dir="../Result/PrototypeModel",
+        use_prototype=True,              # 启用原型模式
+        num_prototypes=10,                # 原型个数
+        prototype_selection_type='k-means',  # 原型选择方式
+        prototype_distance_metric='euclidean'
     )
 
-    # 4) Train (optionally with HPO). window_size=600 is fixed; only lr/wd/etc. are tuned.
-    pipeline.train(
-        use_hpo=True,
-        n_trials=5,
-        optimize_metric="f1",
-        epochs=40,
+    prototype_pipeline.train(
+        use_hpo=True,   # 同样可以开启 HPO
+        epochs=10,
         batch_size=32,
-        patience=10,
+        patience=5,
         normalize=True,
         balance=True,
-        balance_strategy="over"
+        balance_strategy="over",
+        optimize_metric="f1"
     )
-
-    # 5) Final evaluation on test set: confusion matrix + up to 4 example plots
-    results = pipeline.evaluate()
-    print("Final evaluation results:", results)
+    proto_results = prototype_pipeline.evaluate()
+    print("Prototype model results:", proto_results)
