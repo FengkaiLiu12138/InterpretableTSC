@@ -77,7 +77,7 @@ class Pipeline:
         self.num_classes = num_classes
 
         # The window_size is fixed at 600 for sliding-window usage
-        self.window_size = 60
+        self.window_size = 600
         self.model = None
 
         # Decide the output folder
@@ -627,31 +627,31 @@ if __name__ == "__main__":
     # 1) Update your CSV path
     CSV_FILE_PATH = "../Dataset/ftse_minute_data_daily_labelled.csv"
 
-    # # ========== 示例1: 使用基线模型 (e.g. LSTM) ==========\
-    baseline_models = [ResNet_baseline.ResNet, CNN_baseline.CNN, LSTM_baseline.LSTM,
-                        MLP_baseline.MLP, FCN_baseline.FCN]
-    for model_class in baseline_models:
-        pipeline = Pipeline(
-            model_class=model_class,
-            file_path=CSV_FILE_PATH,
-            n_vars=5,  # columns: Close, High, Low, Open, Volume
-            num_classes=2,  # binary classification
-            result_dir=f"../Result/{model_class.__name__}",
-            use_prototype=False  # 关闭原型模式
-        )
-
-        pipeline.train(
-            use_hpo=True,          # 不使用Optuna
-            epochs=10,              # 只跑10个epoch做演示
-            batch_size=32,
-            patience=5,
-            normalize=True,
-            balance=True,
-            balance_strategy="over",
-            optimize_metric="f1"
-        )
-        results = pipeline.evaluate()
-        print("Baseline LSTM results:", results)
+    # # # ========== 示例1: 使用基线模型 (e.g. LSTM) ==========\
+    # baseline_models = [ResNet_baseline.ResNet, CNN_baseline.CNN, LSTM_baseline.LSTM,
+    #                     MLP_baseline.MLP, FCN_baseline.FCN]
+    # for model_class in baseline_models:
+    #     pipeline = Pipeline(
+    #         model_class=model_class,
+    #         file_path=CSV_FILE_PATH,
+    #         n_vars=5,  # columns: Close, High, Low, Open, Volume
+    #         num_classes=2,  # binary classification
+    #         result_dir=f"../Result/{model_class.__name__}",
+    #         use_prototype=False  # 关闭原型模式
+    #     )
+    #
+    #     pipeline.train(
+    #         use_hpo=True,          # 不使用Optuna
+    #         epochs=10,              # 只跑10个epoch做演示
+    #         batch_size=32,
+    #         patience=5,
+    #         normalize=True,
+    #         balance=True,
+    #         balance_strategy="over",
+    #         optimize_metric="f1"
+    #     )
+    #     results = pipeline.evaluate()
+    #     print("Baseline LSTM results:", results)
 
     # ========== 示例2: 使用 PrototypeBasedModel ==========
     selection_types = ["random", "k-means", "gmm"]
@@ -663,7 +663,7 @@ if __name__ == "__main__":
                 file_path=CSV_FILE_PATH,
                 n_vars=5,
                 num_classes=2,
-                result_dir=f"../Result/PrototypeModel/{selection_type}_{distance_metric}_60",
+                result_dir=f"../Result/PrototypeModel/{selection_type}_{distance_metric}",
                 use_prototype=True,              # 启用原型模式
                 num_prototypes=10,                # 原型个数
                 prototype_selection_type=selection_type,  # 原型选择方式
