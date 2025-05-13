@@ -63,7 +63,7 @@ class DatasetConverter:
         self.save_path = save_path
         self.column_names = ['Close', 'High', 'Low', 'Open', 'Volume', 'Labels']
 
-    def convert(self, label_type=0, window_size=600, normalize=True):
+    def convert(self, label_type=0, window_size=600, normalize=True, volume=True):
         """
         Load the dataset from the specified file path.
         If the file contains label columns, they will be used as labels directly.
@@ -71,6 +71,12 @@ class DatasetConverter:
         Label_type:
         0: Use Close price as label
         1: Use all data as labels
+
+        window_size: Size of the window for generating labels
+
+        normalize: Whether to normalize the data by columns into [0, 1]
+
+        volume: Whether to include volume in the dataset
         """
         try:
             # Load the dataset
@@ -87,10 +93,14 @@ class DatasetConverter:
                 # No labels, need to generate them
                 if len(data.columns) >= 5:
                     # Assuming the data has at least 5 columns for financial data
-                    self.data = data[data.columns[:5]].copy()
-                    self.data.columns = self.column_names[:-1]  # Rename columns
+                    self.data = data[data.columns[1:]].copy()
+                    if volume:
+                        self.data.columns = self.column_names[:-1]  # Rename columns
+                    else:
+                        self.data = self.data.iloc[:, :-1]
                     numerical_data = self.data.values
                     self.labels = _generate_labels(numerical_data, label_type, window_size)
+                    print(data.head())
                 else:
                     raise ValueError(f"Expected at least 5 columns for financial data, but got {len(data.columns)}")
 
@@ -124,3 +134,12 @@ class DatasetConverter:
             import traceback
             traceback.print_exc()
             raise
+
+
+if __name__ == "__main__":
+    dc = DatasetConverter(
+        file_path="../Dataset/ftse_minute_data_may.csv",
+        save_path="../Dataset/ftse_minute_data_may_labelled.csv"
+    )
+
+    dc.convert(label_type=1, volume=False)

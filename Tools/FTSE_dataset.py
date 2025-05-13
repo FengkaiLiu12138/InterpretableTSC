@@ -64,8 +64,8 @@ if __name__ == "__main__":
     symbol = "^FTSE"
     interval = "1m"
     chunk_days = 7
-    start_date = dt.datetime(2025, 5, 1)
-    end_date = dt.datetime(2025, 5, 7)
+    start_date = dt.datetime(2025, 4, 1)
+    end_date = dt.datetime(2025, 5, 11)
 
     ftse_data_catcher = FTSEDataCatcher(symbol, interval, chunk_days, start_date, end_date)
-    ftse_data_catcher.catch_data("./archive/ftse_minute_data_may.csv")
+    ftse_data_catcher.catch_data("../Dataset/ftse_minute_data_may.csv")

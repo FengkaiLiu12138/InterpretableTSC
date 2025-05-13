@@ -192,8 +192,7 @@ class Pipeline:
             print("Balanced labels:", np.unique(y, return_counts=True))
 
         if self.use_prototype:
-            print(
-                f"[Prototype Mode] Selecting {self.num_prototypes} prototypes via '{self.prototype_selection_type}' ...")
+            print(f"[Prototype Mode] Selecting {self.num_prototypes} prototypes via '{self.prototype_selection_type}' ...")
             selector = PrototypeSelector(X, y, window_size=self.window_size)
             prototypes, proto_labels, remaining_data, remaining_labels = selector.select_prototypes(
                 num_prototypes=self.num_prototypes,
@@ -206,7 +205,6 @@ class Pipeline:
             prototypes_t = torch.from_numpy(prototypes)
 
             extractor = PrototypeFeatureExtractor(time_series_t, prototypes_t)
-            # 这里可以根据需求可视化一次原型特征图 (示例):
             extractor.plot_prototype_feature_map(metric=self.prototype_distance_metric,
                                                  save_path=os.path.join(self.result_dir, "prototype_feature_map.png"))
 
@@ -530,7 +528,6 @@ class Pipeline:
 
         if not self.use_prototype:
             X_test_np = self.X_test.cpu().numpy()
-
             tn_idx = np.where((labels == 0) & (preds == 0))[0]
             fp_idx = np.where((labels == 0) & (preds == 1))[0]
             fn_idx = np.where((labels == 1) & (preds == 0))[0]
@@ -557,24 +554,38 @@ class Pipeline:
         else:
             print("[Prototype Mode] Skipping example window plots, because input is no longer raw time-series.")
 
-        # 如果是原型模式且模型为PrototypeBasedModel, 可以可视化每个block之后的特征图 (示例: 对第一个测试样本)
-        if self.use_prototype and isinstance(self.model, PrototypeBasedModel):
-            if self.X_test is not None and len(self.X_test) > 0:
-                x_sample = self.X_test[0].unsqueeze(0).to(self.device)
-                block_outs = self.model.forward_with_intermediate(x_sample)
-                for i, bout in enumerate(block_outs, 1):
-                    # bout形状 (1, channels, length), 取第0维
-                    arr = bout[0].cpu().numpy()
-                    plt.figure(figsize=(6, 4))
-                    sns.heatmap(arr, cmap="viridis")
-                    plt.title(f"Block {i} Feature Map")
-                    plt.xlabel("Length")
-                    plt.ylabel("Channels")
-                    plt.tight_layout()
-                    save_name = f"block{i}_feature_map.png"
-                    plt.savefig(os.path.join(self.result_dir, save_name))
-                    plt.close()
-                    print(f"Block {i} feature map saved to: {os.path.join(self.result_dir, save_name)}")
+            # 在原型模式下，如果模型是 PrototypeBasedModel，可以分别生成 TP, FP, FN, TN 的特征图
+            if isinstance(self.model, PrototypeBasedModel) and self.X_test is not None:
+                tn_idx = np.where((labels == 0) & (preds == 0))[0]
+                fp_idx = np.where((labels == 0) & (preds == 1))[0]
+                fn_idx = np.where((labels == 1) & (preds == 0))[0]
+                tp_idx = np.where((labels == 1) & (preds == 1))[0]
+
+                cat_indices = {
+                    "TN": tn_idx,
+                    "FP": fp_idx,
+                    "FN": fn_idx,
+                    "TP": tp_idx
+                }
+                for cat_name, idx_array in cat_indices.items():
+                    if len(idx_array) > 0:
+                        ex_index = idx_array[0]
+                        x_sample = self.X_test[ex_index].unsqueeze(0).to(self.device)
+                        block_outs = self.model.forward_with_intermediate(x_sample)
+                        for i, bout in enumerate(block_outs, 1):
+                            arr = bout[0].cpu().numpy()
+                            plt.figure(figsize=(6, 4))
+                            sns.heatmap(arr, cmap="viridis")
+                            plt.title(f"{cat_name} Block {i} Feature Map")
+                            plt.xlabel("Length")
+                            plt.ylabel("Channels")
+                            plt.tight_layout()
+                            save_name = f"{cat_name.lower()}_block{i}_feature_map.png"
+                            plt.savefig(os.path.join(self.result_dir, save_name))
+                            plt.close()
+                            print(f"{cat_name} Block {i} feature map saved to: {os.path.join(self.result_dir, save_name)}")
+                    else:
+                        print(f"[Prototype Mode] No example for {cat_name} in test set.")
 
         return {"accuracy": acc, "f1": f1}
 
@@ -584,33 +595,33 @@ class Pipeline:
 ###############################################################################
 if __name__ == "__main__":
     # 1) Update your CSV path
-    CSV_FILE_PATH = "../Dataset/ftse_minute_data_daily_labelled.csv"
+    CSV_FILE_PATH = "../Dataset/ftse_minute_data_may_labelled.csv"
+    n_var = 4
+    # # ========== 示例1: 使用基线模型 (e.g. LSTM) ==========\
+    baseline_models = [ResNet_baseline.ResNet, CNN_baseline.CNN, LSTM_baseline.LSTM,
+                        MLP_baseline.MLP, FCN_baseline.FCN]
+    for model_class in baseline_models:
+        pipeline = Pipeline(
+            model_class=model_class,
+            file_path=CSV_FILE_PATH,
+            n_vars=n_var,  # columns: Close, High, Low, Open, Volume
+            num_classes=2,  # binary classification
+            result_dir=f"../Result/may/{model_class.__name__}",
+            use_prototype=False  # 关闭原型模式
+        )
 
-    # # # ========== 示例1: 使用基线模型 (e.g. LSTM) ==========\
-    # baseline_models = [ResNet_baseline.ResNet, CNN_baseline.CNN, LSTM_baseline.LSTM,
-    #                     MLP_baseline.MLP, FCN_baseline.FCN]
-    # for model_class in baseline_models:
-    #     pipeline = Pipeline(
-    #         model_class=model_class,
-    #         file_path=CSV_FILE_PATH,
-    #         n_vars=5,  # columns: Close, High, Low, Open, Volume
-    #         num_classes=2,  # binary classification
-    #         result_dir=f"../Result/{model_class.__name__}",
-    #         use_prototype=False  # 关闭原型模式
-    #     )
-    #
-    #     pipeline.train(
-    #         use_hpo=True,          # 不使用Optuna
-    #         epochs=10,              # 只跑10个epoch做演示
-    #         batch_size=32,
-    #         patience=5,
-    #         normalize=True,
-    #         balance=True,
-    #         balance_strategy="over",
-    #         optimize_metric="f1"
-    #     )
-    #     results = pipeline.evaluate()
-    #     print("Baseline LSTM results:", results)
+        pipeline.train(
+            use_hpo=True,          # 不使用Optuna
+            epochs=10,              # 只跑10个epoch做演示
+            batch_size=32,
+            patience=5,
+            normalize=True,
+            balance=True,
+            balance_strategy="over",
+            optimize_metric="f1"
+        )
+        results = pipeline.evaluate()
+        print("Baseline LSTM results:", results)
 
     # ========== 示例2: 使用 PrototypeBasedModel ==========
     selection_types = ["random", "k-means", "gmm"]
@@ -620,9 +631,9 @@ if __name__ == "__main__":
             prototype_pipeline = Pipeline(
                 model_class=PrototypeBasedModel,  # 你的自定义原型模型
                 file_path=CSV_FILE_PATH,
-                n_vars=5,
+                n_vars=n_var,
                 num_classes=2,
-                result_dir=f"../Result/PrototypeModel/{selection_type}_{distance_metric}",
+                result_dir=f"../Result/may/PrototypeModel/{selection_type}_{distance_metric}",
                 use_prototype=True,  # 启用原型模式
                 num_prototypes=10,  # 原型个数
                 prototype_selection_type=selection_type,  # 原型选择方式

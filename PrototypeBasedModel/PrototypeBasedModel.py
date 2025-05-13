@@ -366,8 +366,8 @@ class PrototypeBasedModel(nn.Module):
 
     def forward_with_intermediate(self, x: torch.Tensor):
         """
-        获取每个block之后的特征图, 便于可解释性可视化.
-        返回一个列表 [block1_out, block2_out, block3_out], 其中每个形状为 (B, channels, length).
+        获取每个block之后的特征图, 用于可解释性可视化.
+        返回 [block1_out, block2_out, block3_out], 形状 (B, channels, length).
         """
         outs = []
         x = x.transpose(1, 2)  # (B, n_var, num_prototypes)
