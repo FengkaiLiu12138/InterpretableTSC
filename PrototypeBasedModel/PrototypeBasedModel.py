@@ -185,20 +185,19 @@ class PrototypeFeatureExtractor:
     def __init__(self, time_series, prototypes):
         """
         Args:
-            time_series (torch.Tensor): 输入数据，形状为 (B, T, C)
-            prototypes (torch.Tensor): 原型，形状为 (num_prototypes, T, C)
+            time_series (torch.Tensor): input time series, shape (B, T, C)
+            prototypes (torch.Tensor): prototype, shape (num_prototypes, T, C)
         """
         self.time_series = time_series
         self.prototypes = prototypes
 
     def compute_prototype_features(self, metric='euclidean'):
         """
-        计算原型特征
+        calculate the distance between time series and prototypes
         Args:
-            metric (str): 距离度量方式，默认使用欧氏距离
-            - 可选 'euclidean', 'dtw', 'cosine'
+            metric (str): 'euclidean' / 'dtw' / 'cosine'
         Returns:
-            torch.Tensor: 原型特征，形状为 (B, num_prototypes, C)
+            features (torch.Tensor): shape (B, num_prototypes, C)
         """
         if metric == 'euclidean':
             return self._compute_euclidean_features()
@@ -211,12 +210,12 @@ class PrototypeFeatureExtractor:
 
     def plot_prototype_feature_map(self, metric='euclidean', save_path="prototype_feature_map.png"):
         """
-        可视化原型特征图 (示例: 对第一个样本的原型特征做一个热力图)
+        visualize prototype feature map
         """
-        features = self.compute_prototype_features(metric=metric)  # (B, num_prototypes, C)
+        features = self.compute_prototype_features(metric=metric)
         if features.shape[0] == 0:
             return
-        first_sample = features[0].cpu().numpy()  # (num_prototypes, C)
+        first_sample = features[0].cpu().numpy()
 
         plt.figure(figsize=(6, 4))
         sns.heatmap(first_sample, annot=False, cmap="viridis")
@@ -273,7 +272,7 @@ class PrototypeFeatureExtractor:
 ###############################################################################
 class PrototypeBasedModel(nn.Module):
     """
-    一个示例：与最初的 ResNet 架构类似，只是输入的形状换成 (B, num_prototypes, C)。
+    Prototype-based model for time series classification.
     """
 
     def __init__(self, num_prototypes: int, n_var: int, num_classes: int):
@@ -366,8 +365,11 @@ class PrototypeBasedModel(nn.Module):
 
     def forward_with_intermediate(self, x: torch.Tensor):
         """
-        获取每个block之后的特征图, 用于可解释性可视化.
-        返回 [block1_out, block2_out, block3_out], 形状 (B, channels, length).
+        get intermediate features
+        Args:
+            x: (B, num_prototypes, n_var)
+        Returns:
+            outs: list of intermediate features
         """
         outs = []
         x = x.transpose(1, 2)  # (B, n_var, num_prototypes)
