@@ -16,12 +16,14 @@ from sklearn.utils import resample
 # For SMOTE. You need to install imbalanced-learn: pip install imbalanced-learn
 try:
     from imblearn.over_sampling import SMOTE
+
     _has_smote = True
 except ImportError:
     _has_smote = False
     print("Warning: imbalanced-learn is not installed. SMOTE will not be available.")
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -54,6 +56,7 @@ class FocalLoss(nn.Module):
     gamma>1 emphasizes hard-to-classify samples.
     alpha can be used to assign different weights to classes.
     """
+
     def __init__(self, alpha=1.0, gamma=2.0, reduction='mean'):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
@@ -87,16 +90,16 @@ class Pipeline:
     """
 
     def __init__(
-        self,
-        model_class,
-        file_path: str,
-        n_vars: int,
-        num_classes: int,
-        result_dir: str | None = None,
-        use_prototype: bool = False,
-        num_prototypes: int = 8,
-        prototype_selection_type: str = 'random',
-        prototype_distance_metric: str = 'euclidean',
+            self,
+            model_class,
+            file_path: str,
+            n_vars: int,
+            num_classes: int,
+            result_dir: str | None = None,
+            use_prototype: bool = False,
+            num_prototypes: int = 8,
+            prototype_selection_type: str = 'random',
+            prototype_distance_metric: str = 'euclidean',
     ):
         self.model_class = model_class
         self.file_path = file_path
@@ -209,13 +212,13 @@ class Pipeline:
         self.dataset = (X, y)
 
     def data_loader(
-        self,
-        batch_size: int = 32,
-        train_ratio: float = 0.7,
-        valid_ratio: float = 0.15,
-        test_ratio: float = 0.15,
-        balance: bool = False,
-        balance_strategy: Literal["over", "under", "smote"] = "over",
+            self,
+            batch_size: int = 32,
+            train_ratio: float = 0.7,
+            valid_ratio: float = 0.15,
+            test_ratio: float = 0.15,
+            balance: bool = False,
+            balance_strategy: Literal["over", "under", "smote"] = "over",
     ):
         """
         Split into train/valid/test. If balance=True, only the training set is balanced.
@@ -369,7 +372,7 @@ class Pipeline:
                     val_loss += criterion(self.model(x), y).item() * x.size(0)
             val_loss /= len(self.valid_loader.dataset)
 
-            print(f"Epoch {ep+1}/{epochs} | Train Loss={avg_loss:.4f} | Val Loss={val_loss:.4f}")
+            print(f"Epoch {ep + 1}/{epochs} | Train Loss={avg_loss:.4f} | Val Loss={val_loss:.4f}")
 
             if val_loss < best_loss:
                 best_loss = val_loss
@@ -459,21 +462,21 @@ class Pipeline:
         return metric
 
     def train(
-        self,
-        epochs: int = 50,
-        batch_size: int = 32,
-        learning_rate: float = 1e-3,
-        weight_decay: float = 1e-4,
-        use_hpo: bool = False,
-        n_trials: int = 30,
-        optimize_metric: str = "loss",
-        patience: int = 10,
-        normalize: bool = True,
-        balance: bool = False,
-        balance_strategy: Literal["over", "under", "smote"] = "over",
-        cost_sensitive: Literal["weighted_ce", "focal", None] = None,
-        focal_alpha: float = 1.0,
-        focal_gamma: float = 2.0,
+            self,
+            epochs: int = 50,
+            batch_size: int = 32,
+            learning_rate: float = 1e-3,
+            weight_decay: float = 1e-4,
+            use_hpo: bool = False,
+            n_trials: int = 30,
+            optimize_metric: str = "loss",
+            patience: int = 10,
+            normalize: bool = True,
+            balance: bool = False,
+            balance_strategy: Literal["over", "under", "smote"] = "over",
+            cost_sensitive: Literal["weighted_ce", "focal", None] = None,
+            focal_alpha: float = 1.0,
+            focal_gamma: float = 2.0,
     ):
         """
         Arguments:
@@ -605,8 +608,10 @@ class Pipeline:
 # Example usage (main)
 ###############################################################################
 if __name__ == "__main__":
-    CSV_FILE_PATH = "../Dataset/ftse_minute_data_may_labelled.csv"
-    n_var = 4
+    CSV_FILE_PATH_1 = "../Dataset/ftse_minute_data_may_labelled.csv"
+    n_var_1 = 4
+    CSV_FILE_PATH_2 = "../Dataset/ftse_minute_data_daily_labelled.csv"
+    n_var_2 = 5
 
     # Baseline models
     baseline_models = [
@@ -616,12 +621,15 @@ if __name__ == "__main__":
         MLP_baseline.MLP,
         FCN_baseline.FCN
     ]
+    # Prototype-based models
+    selection_types = ["random", "k-means", "gmm"]
+    distance_metrics = ["euclidean", "cosine"]
 
     for model_class in baseline_models:
         pipeline = Pipeline(
             model_class=model_class,
-            file_path=CSV_FILE_PATH,
-            n_vars=n_var,
+            file_path=CSV_FILE_PATH_1,
+            n_vars=n_var_1,
             num_classes=2,
             result_dir=f"../Result/may/{model_class.__name__}",
             use_prototype=False
@@ -631,14 +639,73 @@ if __name__ == "__main__":
         pipeline.train(
             use_hpo=True,
             n_trials=10,
-            epochs=10,            # just an initial range for Optuna, actual ep is overridden by best param
+            epochs=10,  # just an initial range for Optuna, actual ep is overridden by best param
             batch_size=32,
             patience=5,
             normalize=True,
             balance=True,
             balance_strategy="smote",  # requires imbalanced-learn
             optimize_metric="f1",
-            cost_sensitive="focal",    # use FocalLoss
+            cost_sensitive="focal",  # use FocalLoss
+            focal_alpha=1.0,
+            focal_gamma=2.0
+        )
+
+        results = pipeline.evaluate(threshold=0.5)
+        print(f"{model_class.__name__} results:", results)
+
+    for selection_type in selection_types:
+        for distance_metric in distance_metrics:
+            prototype_pipeline = Pipeline(
+                model_class=PrototypeBasedModel,
+                file_path=CSV_FILE_PATH_1,
+                n_vars=n_var_1,
+                num_classes=2,
+                result_dir=f"../Result/may/PrototypeModel/{selection_type}_{distance_metric}",
+                use_prototype=True,
+                num_prototypes=10,
+                prototype_selection_type=selection_type,
+                prototype_distance_metric=distance_metric
+            )
+
+            prototype_pipeline.train(
+                use_hpo=True,
+                n_trials=10,
+                epochs=10,
+                batch_size=32,
+                patience=5,
+                normalize=True,
+                balance=True,
+                balance_strategy="over",
+                optimize_metric="f1",
+                cost_sensitive="weighted_ce"  # Example of weighted CE
+            )
+            proto_results = prototype_pipeline.evaluate(threshold=0.5)
+            print(f"PrototypeModel-{selection_type}-{distance_metric} results:", proto_results)
+
+    # Daily
+    for model_class in baseline_models:
+        pipeline = Pipeline(
+            model_class=model_class,
+            file_path=CSV_FILE_PATH_2,
+            n_vars=n_var_2,
+            num_classes=2,
+            result_dir=f"../Result/{model_class.__name__}",
+            use_prototype=False
+        )
+
+        # Train example: enable FocalLoss + SMOTE + auto hpo
+        pipeline.train(
+            use_hpo=True,
+            n_trials=10,
+            epochs=10,  # just an initial range for Optuna, actual ep is overridden by best param
+            batch_size=32,
+            patience=5,
+            normalize=True,
+            balance=True,
+            balance_strategy="smote",  # requires imbalanced-learn
+            optimize_metric="f1",
+            cost_sensitive="focal",  # use FocalLoss
             focal_alpha=1.0,
             focal_gamma=2.0
         )
@@ -647,16 +714,14 @@ if __name__ == "__main__":
         print(f"{model_class.__name__} results:", results)
 
     # Prototype-based models
-    selection_types = ["random", "k-means", "gmm"]
-    distance_metrics = ["euclidean", "cosine"]
     for selection_type in selection_types:
         for distance_metric in distance_metrics:
             prototype_pipeline = Pipeline(
                 model_class=PrototypeBasedModel,
-                file_path=CSV_FILE_PATH,
-                n_vars=n_var,
+                file_path=CSV_FILE_PATH_2,
+                n_vars=n_var_2,
                 num_classes=2,
-                result_dir=f"../Result/may/PrototypeModel/{selection_type}_{distance_metric}",
+                result_dir=f"../Result/PrototypeModel/{selection_type}_{distance_metric}",
                 use_prototype=True,
                 num_prototypes=10,
                 prototype_selection_type=selection_type,
