@@ -13,13 +13,21 @@ from torch.utils.data import DataLoader, TensorDataset, random_split
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 from sklearn.utils import resample
 
-import matplotlib
+# For SMOTE. You need to install imbalanced-learn: pip install imbalanced-learn
+try:
+    from imblearn.over_sampling import SMOTE
+    _has_smote = True
+except ImportError:
+    _has_smote = False
+    print("Warning: imbalanced-learn is not installed. SMOTE will not be available.")
 
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import optuna
 
+# Baseline model definitions
 from BaselineModel import (
     ResNet_baseline,
     CNN_baseline,
@@ -28,17 +36,54 @@ from BaselineModel import (
     FCN_baseline
 )
 
+# Prototype-based model
 from PrototypeBasedModel import PrototypeBasedModel
-from PrototypeBasedModel.PrototypeBasedModel import PrototypeBasedModel, PrototypeFeatureExtractor, PrototypeSelector
+from PrototypeBasedModel.PrototypeBasedModel import (
+    PrototypeBasedModel,
+    PrototypeFeatureExtractor,
+    PrototypeSelector
+)
 
 
 ###############################################################################
-#  Pipeline
+# Custom Focal Loss
+###############################################################################
+class FocalLoss(nn.Module):
+    """
+    Focal loss: a variant of cross-entropy that focuses more on misclassified examples.
+    gamma>1 emphasizes hard-to-classify samples.
+    alpha can be used to assign different weights to classes.
+    """
+    def __init__(self, alpha=1.0, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # inputs: (B, C), targets: (B,)
+        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)  # pt = 1 - p if y=1
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
+###############################################################################
+# Pipeline
 ###############################################################################
 class Pipeline:
     """
-    An end-to-end pipeline for binary classification (0/1) with optional prototype features.
-    Only the training set is balanced; validation and test sets remain untouched.
+    Main logic:
+      - Load CSV and do preprocessing (optional normalization, optional prototype selection)
+      - Split into train/valid/test. Only the training set is balanced (over/under/SMOTE).
+      - Optionally apply cost-sensitive/improved losses (Weighted CE/Focal Loss)
+      - Train with early stopping
+      - Evaluate on the test set with a customizable threshold
     """
 
     def __init__(
@@ -113,12 +158,18 @@ class Pipeline:
         """
         self._normalize = normalize
         df = self._df.copy()
+
+        # Select relevant columns (Close, High, Low, Open, Volume, etc.) up to n_vars
         feature_cols = ["Close", "High", "Low", "Open", "Volume"][:self.n_vars]
+
+        # Normalization
         if normalize:
             for col in feature_cols:
                 mn, mx = df[col].min(), df[col].max()
                 df[col] = (df[col] - mn) / (mx - mn + 1e-12)
 
+        # Build sliding windows of size self.window_size
+        X_list, y_list = []
         X_list, y_list = [], []
         half_w = self.window_size // 2
         total_len = len(df)
@@ -133,6 +184,7 @@ class Pipeline:
         X = np.array(X_list, dtype=np.float32)
         y = np.array(y_list, dtype=np.int64)
 
+        # If using the prototype-based approach, select prototypes first
         if self.use_prototype:
             selector = PrototypeSelector(X, y, window_size=self.window_size)
             protos, proto_labels, rem_data, rem_labels = selector.select_prototypes(
@@ -141,6 +193,8 @@ class Pipeline:
             )
             self._prototypes = protos
             self._proto_labels = proto_labels
+
+            # Compute prototype features
             t_data = torch.from_numpy(rem_data)
             t_proto = torch.from_numpy(protos)
             extractor = PrototypeFeatureExtractor(t_data, t_proto)
@@ -161,10 +215,11 @@ class Pipeline:
         valid_ratio: float = 0.15,
         test_ratio: float = 0.15,
         balance: bool = False,
-        balance_strategy: Literal["over", "under"] = "over",
+        balance_strategy: Literal["over", "under", "smote"] = "over",
     ):
         """
-        Split into train/valid/test, then optionally balance only the training set.
+        Split into train/valid/test. If balance=True, only the training set is balanced.
+        balance_strategy can be "over", "under", or "smote" (if imbalanced-learn is installed).
         """
         self._balance = balance
         self._balance_strategy = balance_strategy
@@ -186,6 +241,7 @@ class Pipeline:
 
         print(f"Split sizes: train={len(train_ds)}, valid={len(valid_ds)}, test={len(test_ds)}")
 
+        # Balance training set if needed
         if balance:
             x_train_list, y_train_list = [], []
             for (xx, yy) in train_ds:
@@ -194,50 +250,69 @@ class Pipeline:
             x_train_arr = np.array(x_train_list)
             y_train_arr = np.array(y_train_list)
 
-            c0 = np.sum(y_train_arr == 0)
-            c1 = np.sum(y_train_arr == 1)
-            if c1 > c0:
-                maj_label, min_label = 1, 0
-            else:
-                maj_label, min_label = 0, 1
+            if balance_strategy == "over" or balance_strategy == "under":
+                # Count class 0/1
+                c0 = np.sum(y_train_arr == 0)
+                c1 = np.sum(y_train_arr == 1)
+                if c1 > c0:
+                    maj_label, min_label = 1, 0
+                else:
+                    maj_label, min_label = 0, 1
 
-            x_maj = x_train_arr[y_train_arr == maj_label]
-            x_min = x_train_arr[y_train_arr == min_label]
-            if balance_strategy == "over":
-                x_min_rs = resample(x_min, replace=True, n_samples=len(x_maj), random_state=42)
-                y_min_rs = np.full(len(x_maj), min_label)
-                x_bal = np.concatenate([x_maj, x_min_rs], axis=0)
-                y_bal = np.concatenate([
-                    np.full(len(x_maj), maj_label),
-                    y_min_rs
-                ], axis=0)
-            else:
-                x_maj_rs = resample(x_maj, replace=False, n_samples=len(x_min), random_state=42)
-                y_maj_rs = np.full(len(x_min), maj_label)
-                x_bal = np.concatenate([x_maj_rs, x_min], axis=0)
-                y_bal = np.concatenate([y_maj_rs, np.full(len(x_min), min_label)], axis=0)
+                x_maj = x_train_arr[y_train_arr == maj_label]
+                x_min = x_train_arr[y_train_arr == min_label]
 
-            shuffle_idx = np.random.RandomState(42).permutation(len(x_bal))
-            x_bal = x_bal[shuffle_idx]
-            y_bal = y_bal[shuffle_idx]
+                if balance_strategy == "over":
+                    # Oversample minority class
+                    x_min_rs = resample(x_min, replace=True, n_samples=len(x_maj), random_state=42)
+                    y_min_rs = np.full(len(x_maj), min_label)
+                    x_bal = np.concatenate([x_maj, x_min_rs], axis=0)
+                    y_bal = np.concatenate([
+                        np.full(len(x_maj), maj_label),
+                        y_min_rs
+                    ], axis=0)
+                else:
+                    # Undersample majority class
+                    x_maj_rs = resample(x_maj, replace=False, n_samples=len(x_min), random_state=42)
+                    y_maj_rs = np.full(len(x_min), maj_label)
+                    x_bal = np.concatenate([x_maj_rs, x_min], axis=0)
+                    y_bal = np.concatenate([y_maj_rs, np.full(len(x_min), min_label)], axis=0)
+
+                shuffle_idx = np.random.RandomState(42).permutation(len(x_bal))
+                x_bal = x_bal[shuffle_idx]
+                y_bal = y_bal[shuffle_idx]
+
+            elif balance_strategy == "smote":
+                # SMOTE requires imbalanced-learn
+                if not _has_smote:
+                    raise ImportError("imbalanced-learn is not installed. SMOTE is unavailable.")
+                # Flatten shape (N, window_size, n_vars) into (N, window_size*n_vars) for SMOTE
+                # Then reshape back. This is just a demonstration; real cases may require more nuanced methods.
+                N, W, D = x_train_arr.shape
+                x_train_2d = x_train_arr.reshape(N, -1)
+                sm = SMOTE(random_state=42)
+                x_bal_2d, y_bal = sm.fit_resample(x_train_2d, y_train_arr)
+                newN = x_bal_2d.shape[0]
+                x_bal = x_bal_2d.reshape(newN, W, D)
+
             print(f"Balanced train set: X={x_bal.shape}, y={y_bal.shape}")
             train_ds = TensorDataset(torch.from_numpy(x_bal).float(), torch.from_numpy(y_bal).long())
         else:
-            # Print train set shape if not balanced
+            # Print unbalanced train set info
             x_train_list, y_train_list = [], []
             for (xx, yy) in train_ds:
                 x_train_list.append(xx.numpy())
                 y_train_list.append(yy.item())
             print(f"Unbalanced train set: X={np.array(x_train_list).shape}, y={np.array(y_train_list).shape}")
 
-        # Print valid set shape
+        # Validation set
         x_valid_list, y_valid_list = [], []
         for (xx, yy) in valid_ds:
             x_valid_list.append(xx.numpy())
             y_valid_list.append(yy.item())
         print(f"Valid set shape: X={np.array(x_valid_list).shape}, y={np.array(y_valid_list).shape}")
 
-        # Print test set shape
+        # Test set
         x_test_list, y_test_list = [], []
         for (xx, yy) in test_ds:
             x_test_list.append(xx.numpy())
@@ -251,6 +326,9 @@ class Pipeline:
         self.test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     def _eval_val(self, model):
+        """
+        Perform a simple validation-set evaluation using argmax. Returns accuracy and f1.
+        """
         model.eval()
         preds, labels = [], []
         with torch.no_grad():
@@ -264,6 +342,9 @@ class Pipeline:
         return acc, f1
 
     def _train_loop(self, optimizer, criterion, epochs, patience):
+        """
+        Standard training loop with early stopping on validation loss.
+        """
         best_loss = float("inf")
         wait = 0
         self.best_model = copy.deepcopy(self.model)
@@ -304,20 +385,27 @@ class Pipeline:
         return best_loss
 
     def _optuna_objective(self, trial):
+        """
+        Objective function for hyperparameter optimization using Optuna.
+        You can customize the search ranges and the metric to optimize.
+        """
         lr = trial.suggest_float("lr", 1e-4, 1e-1, log=True)
         wd = trial.suggest_float("wd", 1e-5, 1e-1, log=True)
         opt = trial.suggest_categorical("opt", ["adam", "sgd"])
         epochs = trial.suggest_int("epochs", 20, 60)
 
+        # For each trial, do the data preprocessing & loading again
         self.preprocessing(normalize=self._normalize)
         self.data_loader(batch_size=32, balance=self._balance, balance_strategy=self._balance_strategy)
 
+        # Re-initialize model
         if issubclass(self.model_class, PrototypeBasedModel):
             self.model = self.model_class(self.num_prototypes, self.n_vars, self.num_classes).to(self.device)
         else:
             self.model = self.model_class(self.window_size, self.n_vars, self.num_classes).to(self.device)
-
         self.model.apply(self._reset_weights)
+
+        # Default loss is CrossEntropyLoss
         criterion = nn.CrossEntropyLoss()
 
         if opt == "adam":
@@ -338,6 +426,7 @@ class Pipeline:
                 loss.backward()
                 optimizer.step()
 
+            # Evaluate on the validation set
             self.model.eval()
             vloss = 0
             with torch.no_grad():
@@ -347,6 +436,7 @@ class Pipeline:
             vloss /= len(self.valid_loader.dataset)
 
             acc, f1 = self._eval_val(self.model)
+            # Determine which metric to optimize
             if self._opt_metric == "loss":
                 metric = vloss
             elif self._opt_metric == "accuracy":
@@ -365,6 +455,7 @@ class Pipeline:
                 wait += 1
                 if wait >= patience:
                     break
+
         return metric
 
     def train(
@@ -379,22 +470,35 @@ class Pipeline:
         patience: int = 10,
         normalize: bool = True,
         balance: bool = False,
-        balance_strategy: Literal["over", "under"] = "over",
+        balance_strategy: Literal["over", "under", "smote"] = "over",
+        cost_sensitive: Literal["weighted_ce", "focal", None] = None,
+        focal_alpha: float = 1.0,
+        focal_gamma: float = 2.0,
     ):
+        """
+        Arguments:
+          - cost_sensitive:
+             * "weighted_ce": Weighted cross-entropy
+             * "focal": Focal Loss
+             * None: default cross-entropy
+        """
         self._opt_metric = optimize_metric.lower()
         self._normalize = normalize
         self._balance = balance
         self._balance_strategy = balance_strategy
 
+        # If use_hpo=True, run Optuna for hyperparameter search
         if use_hpo:
             direction = "minimize" if self._opt_metric == "loss" else "maximize"
             study = optuna.create_study(direction=direction)
             study.optimize(self._optuna_objective, n_trials=n_trials)
+
             best = study.best_params
             with open(os.path.join(self.result_dir, "optuna_best_params.txt"), "w") as f:
                 f.write(f"Best hyperparams:\n{best}\n")
                 f.write(f"\nBest {self._opt_metric}: {study.best_value}\n")
 
+            # Train again with the best hyperparams
             lr = best["lr"]
             wd = best["wd"]
             opt_method = best["opt"]
@@ -408,15 +512,30 @@ class Pipeline:
             else:
                 self.model = self.model_class(self.window_size, self.n_vars, self.num_classes).to(self.device)
 
+            # Build the criterion
+            criterion = nn.CrossEntropyLoss()
+            if cost_sensitive == "weighted_ce":
+                # Compute class weights from the final train set
+                all_ys = []
+                for _, yy in self.train_loader.dataset:
+                    all_ys.append(yy.item())
+                counts = np.bincount(all_ys)
+                weights = [sum(counts) / c for c in counts]
+                weights = torch.FloatTensor(weights).to(self.device)
+                criterion = nn.CrossEntropyLoss(weight=weights)
+            elif cost_sensitive == "focal":
+                criterion = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
+
             if opt_method == "adam":
                 optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=wd)
             else:
                 optimizer = optim.SGD(self.model.parameters(), lr=lr, weight_decay=wd)
 
-            val_loss = self._train_loop(optimizer, nn.CrossEntropyLoss(), epochs=ep, patience=patience)
+            val_loss = self._train_loop(optimizer, criterion, epochs=ep, patience=patience)
             return self.best_model, val_loss
 
         else:
+            # Otherwise, just do a single training run
             self.preprocessing(normalize=normalize)
             self.data_loader(batch_size=batch_size, balance=balance, balance_strategy=balance_strategy)
 
@@ -425,20 +544,41 @@ class Pipeline:
             else:
                 self.model = self.model_class(self.window_size, self.n_vars, self.num_classes).to(self.device)
 
+            # Build the criterion
+            criterion = nn.CrossEntropyLoss()
+            if cost_sensitive == "weighted_ce":
+                all_ys = []
+                for _, yy in self.train_loader.dataset:
+                    all_ys.append(yy.item())
+                counts = np.bincount(all_ys)
+                weights = [sum(counts) / c for c in counts]
+                weights = torch.FloatTensor(weights).to(self.device)
+                criterion = nn.CrossEntropyLoss(weight=weights)
+            elif cost_sensitive == "focal":
+                criterion = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
+
             optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-            val_loss = self._train_loop(optimizer, nn.CrossEntropyLoss(), epochs=epochs, patience=patience)
+            val_loss = self._train_loop(optimizer, criterion, epochs=epochs, patience=patience)
             return self.best_model, val_loss
 
-    def evaluate(self):
+    def evaluate(self, threshold: float = 0.5):
+        """
+        Evaluate on the test set. We compute softmax => take class-1 probability => compare with threshold.
+        Default threshold=0.5.
+        """
         if self.test_loader is None:
             raise ValueError("Call data_loader() before evaluate().")
         self.model.eval()
+
         preds, labels = [], []
         with torch.no_grad():
             for x, y in self.test_loader:
                 x, y = x.to(self.device).float(), y.to(self.device)
                 logits = self.model(x)
-                preds.extend(torch.argmax(logits, 1).cpu().numpy())
+                # Convert logits to softmax probability for class 1
+                probs = nn.functional.softmax(logits, dim=1)[:, 1]
+                pred = (probs >= threshold).long()
+                preds.extend(pred.cpu().numpy())
                 labels.extend(y.cpu().numpy())
 
         preds = np.array(preds)
@@ -446,7 +586,7 @@ class Pipeline:
         acc = accuracy_score(labels, preds)
         f1 = self._binary_f1(labels, preds)
         self.confusion_mat = confusion_matrix(labels, preds)
-        print(f"Test Accuracy: {acc:.4f}, F1: {f1:.4f}")
+        print(f"Test Accuracy: {acc:.4f}, F1: {f1:.4f}, Threshold={threshold}")
 
         plt.figure(figsize=(4, 3))
         sns.heatmap(self.confusion_mat, annot=True, cmap="Blues", fmt="d",
@@ -461,15 +601,22 @@ class Pipeline:
         return {"accuracy": acc, "f1": f1}
 
 
-
 ###############################################################################
 # Example usage (main)
 ###############################################################################
 if __name__ == "__main__":
     CSV_FILE_PATH = "../Dataset/ftse_minute_data_may_labelled.csv"
     n_var = 4
-    baseline_models = [ResNet_baseline.ResNet, CNN_baseline.CNN, LSTM_baseline.LSTM,
-                        MLP_baseline.MLP, FCN_baseline.FCN]
+
+    # Baseline models
+    baseline_models = [
+        ResNet_baseline.ResNet,
+        CNN_baseline.CNN,
+        LSTM_baseline.LSTM,
+        MLP_baseline.MLP,
+        FCN_baseline.FCN
+    ]
+
     for model_class in baseline_models:
         pipeline = Pipeline(
             model_class=model_class,
@@ -480,18 +627,24 @@ if __name__ == "__main__":
             use_prototype=False
         )
 
+        # Train example: enable FocalLoss + SMOTE + auto hpo
         pipeline.train(
             use_hpo=True,
-            epochs=10,
+            n_trials=10,
+            epochs=10,            # just an initial range for Optuna, actual ep is overridden by best param
             batch_size=32,
             patience=5,
             normalize=True,
             balance=True,
-            balance_strategy="over",
-            optimize_metric="f1"
+            balance_strategy="smote",  # requires imbalanced-learn
+            optimize_metric="f1",
+            cost_sensitive="focal",    # use FocalLoss
+            focal_alpha=1.0,
+            focal_gamma=2.0
         )
-        results = pipeline.evaluate()
-        print("Baseline LSTM results:", results)
+
+        results = pipeline.evaluate(threshold=0.5)
+        print(f"{model_class.__name__} results:", results)
 
     # Prototype-based models
     selection_types = ["random", "k-means", "gmm"]
@@ -512,13 +665,15 @@ if __name__ == "__main__":
 
             prototype_pipeline.train(
                 use_hpo=True,
+                n_trials=10,
                 epochs=10,
                 batch_size=32,
                 patience=5,
                 normalize=True,
                 balance=True,
                 balance_strategy="over",
-                optimize_metric="f1"
+                optimize_metric="f1",
+                cost_sensitive="weighted_ce"  # Example of weighted CE
             )
-            proto_results = prototype_pipeline.evaluate()
-            print("Prototype model results:", proto_results)
+            proto_results = prototype_pipeline.evaluate(threshold=0.5)
+            print(f"PrototypeModel-{selection_type}-{distance_metric} results:", proto_results)
