@@ -172,7 +172,6 @@ class Pipeline:
                 df[col] = (df[col] - mn) / (mx - mn + 1e-12)
 
         # Build sliding windows of size self.window_size
-        X_list, y_list = []
         X_list, y_list = [], []
         half_w = self.window_size // 2
         total_len = len(df)
