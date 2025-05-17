@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader, TensorDataset, random_split
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 from sklearn.utils import resample
 
-# For SMOTE. You need to install imbalanced-learn: pip install imbalanced-learn
 try:
     from imblearn.over_sampling import SMOTE
 
@@ -602,6 +601,69 @@ class Pipeline:
 
         return {"accuracy": acc, "f1": f1}
 
+    def find_best_threshold(self, step: float = 0.01, metric: str = "f1", plot_curve: bool = True) -> float:
+        """
+        Post-hoc search on the validation set to find the best threshold that maximizes a chosen metric (f1 or accuracy).
+        step: increment to sweep threshold [0, 1].
+        metric: "f1" or "accuracy"
+        plot_curve: if True, save a (threshold vs. metric) plot in result_dir.
+        Returns the best threshold.
+        """
+        if self.valid_loader is None:
+            raise ValueError("Please call data_loader() to create train/valid/test splits.")
+        if self.model is None:
+            raise ValueError("Please call train() to train the model first.")
+
+        self.model.eval()
+        all_probs = []
+        all_labels = []
+        # Collect validation set predictions (as probabilities of class=1)
+        with torch.no_grad():
+            for x, y in self.valid_loader:
+                x = x.to(self.device)
+                y = y.to(self.device)
+                logits = self.model(x)
+                probs = torch.softmax(logits, dim=1)[:, 1]  # probability of class 1
+                all_probs.extend(probs.cpu().numpy())
+                all_labels.extend(y.cpu().numpy())
+
+        all_probs = np.array(all_probs)
+        all_labels = np.array(all_labels)
+
+        thresholds = np.arange(0.0, 1.0 + 1e-9, step)
+        scores = []
+        best_threshold = 0.5
+        best_score = -1
+
+        for th in thresholds:
+            preds = (all_probs >= th).astype(int)
+            if metric.lower() == "f1":
+                sc = f1_score(all_labels, preds)
+            elif metric.lower() == "accuracy":
+                sc = accuracy_score(all_labels, preds)
+            else:
+                raise ValueError("Only 'f1' or 'accuracy' are supported as metrics.")
+            scores.append(sc)
+            if sc > best_score:
+                best_score = sc
+                best_threshold = th
+
+        print(f"[find_best_threshold] Best threshold on validation set = {best_threshold:.3f}, {metric}={best_score:.4f}")
+
+        # Optional: plot threshold curve
+        if plot_curve:
+            plt.figure(figsize=(6, 4))
+            plt.plot(thresholds, scores, marker="o")
+            plt.xlabel("Threshold")
+            plt.ylabel(metric.upper())
+            plt.title(f"Threshold vs. {metric.upper()} (val set)")
+            plt.grid(True)
+            plt.tight_layout()
+            curve_path = os.path.join(self.result_dir, f"threshold_{metric}_curve.png")
+            plt.savefig(curve_path)
+            plt.close()
+
+        return best_threshold
 
 ###############################################################################
 # Example usage (main)
@@ -634,23 +696,22 @@ if __name__ == "__main__":
             use_prototype=False
         )
 
-        # Train example: enable FocalLoss + SMOTE + auto hpo
         pipeline.train(
             use_hpo=True,
-            n_trials=10,
-            epochs=10,  # just an initial range for Optuna, actual ep is overridden by best param
+            n_trials=50,
+            epochs=10,
             batch_size=32,
             patience=5,
             normalize=True,
             balance=True,
             balance_strategy="smote",  # requires imbalanced-learn
             optimize_metric="f1",
-            cost_sensitive="focal",  # use FocalLoss
+            cost_sensitive="weighted_ce",  # use FocalLoss
             focal_alpha=1.0,
             focal_gamma=2.0
         )
-
-        results = pipeline.evaluate(threshold=0.5)
+        bst_threshold = pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
+        results = pipeline.evaluate(threshold=bst_threshold)
         print(f"{model_class.__name__} results:", results)
 
     for selection_type in selection_types:
@@ -679,7 +740,8 @@ if __name__ == "__main__":
                 optimize_metric="f1",
                 cost_sensitive="weighted_ce"  # Example of weighted CE
             )
-            proto_results = prototype_pipeline.evaluate(threshold=0.5)
+            bst_threshold = prototype_pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
+            proto_results = prototype_pipeline.evaluate(threshold=bst_threshold)
             print(f"PrototypeModel-{selection_type}-{distance_metric} results:", proto_results)
 
     # Daily
@@ -704,12 +766,13 @@ if __name__ == "__main__":
             balance=True,
             balance_strategy="smote",  # requires imbalanced-learn
             optimize_metric="f1",
-            cost_sensitive="focal",  # use FocalLoss
+            cost_sensitive="weighted_ce",  # use FocalLoss
             focal_alpha=1.0,
             focal_gamma=2.0
         )
 
-        results = pipeline.evaluate(threshold=0.5)
+        bst_threshold = pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
+        results = pipeline.evaluate(threshold=bst_threshold)
         print(f"{model_class.__name__} results:", results)
 
     # Prototype-based models
@@ -737,7 +800,8 @@ if __name__ == "__main__":
                 balance=True,
                 balance_strategy="over",
                 optimize_metric="f1",
-                cost_sensitive="weighted_ce"  # Example of weighted CE
+                cost_sensitive="weighted_ce"
             )
-            proto_results = prototype_pipeline.evaluate(threshold=0.5)
+            bst_threshold = prototype_pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
+            proto_results = prototype_pipeline.evaluate(threshold=bst_threshold)
             print(f"PrototypeModel-{selection_type}-{distance_metric} results:", proto_results)
