@@ -203,6 +203,12 @@ class Pipeline:
                 metric=self.prototype_distance_metric,
                 save_path=os.path.join(self.result_dir, "prototype_feature_map.png")
             )
+            extractor.plot_prototype_cycles(
+                save_dir=self.result_dir,
+                short_window=30,
+                long_window=120,
+                prefix="prototype_cycle"
+            )
             feats = extractor.compute_prototype_features(metric=self.prototype_distance_metric)
             X = feats.numpy()
             y = rem_labels
