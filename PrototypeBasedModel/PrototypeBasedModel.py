@@ -1,4 +1,6 @@
+import os
 import numpy as np
+import pandas as pd
 from matplotlib import pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
@@ -225,6 +227,45 @@ class PrototypeFeatureExtractor:
         plt.tight_layout()
         plt.savefig(save_path)
         plt.close()
+
+    def plot_prototype_cycles(
+        self,
+        short_window: int = 30,
+        long_window: int = 120,
+        save_dir: str = '.',
+        prefix: str = 'prototype_cycle'
+    ):
+        """Plot each prototype with short/long moving averages.
+
+        This visualization helps relate prototypes to long/short cycles,
+        offering interpretable turning-point patterns.
+        """
+        os.makedirs(save_dir, exist_ok=True)
+        num_prototypes = self.prototypes.shape[0]
+        for idx in range(num_prototypes):
+            proto = self.prototypes[idx]
+            if isinstance(proto, torch.Tensor):
+                proto_np = proto.cpu().numpy()
+            else:
+                proto_np = proto
+
+            close_series = proto_np[:, 0]  # assume first channel is Close price
+            short_ma = pd.Series(close_series).rolling(window=short_window).mean()
+            long_ma = pd.Series(close_series).rolling(window=long_window).mean()
+
+            plt.figure(figsize=(8, 4))
+            plt.plot(close_series, label='Close', color='black')
+            plt.plot(short_ma, label=f'MA{short_window}', linestyle='--')
+            plt.plot(long_ma, label=f'MA{long_window}', linestyle='-.')
+            plt.axvline(len(close_series)//2, color='red', linestyle=':', label='center')
+            plt.title(f'Prototype {idx}')
+            plt.xlabel('Time Step')
+            plt.ylabel('Normalized Price')
+            plt.legend()
+            plt.tight_layout()
+            save_path = os.path.join(save_dir, f'{prefix}_{idx}.png')
+            plt.savefig(save_path)
+            plt.close()
 
     def _compute_euclidean_features(self):
         B, T, C = self.time_series.shape
