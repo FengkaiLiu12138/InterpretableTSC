@@ -716,7 +716,7 @@ if __name__ == "__main__":
 
         pipeline.train(
             use_hpo=True,
-            n_trials=50,
+            n_trials=10,
             epochs=10,
             batch_size=32,
             patience=5,
