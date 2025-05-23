@@ -38,11 +38,16 @@ from BaselineModel import (
 )
 
 # Prototype-based model
-from PrototypeBasedModel import PrototypeBasedModel
-from PrototypeBasedModel.PrototypeBasedModel import (
-    PrototypeBasedModel,
+from PrototypeBasedModel import (
+    PrototypeBasedModel,  # ResNet variant (backward compatibility)
+    PrototypeCNN,
+    PrototypeFCN,
+    PrototypeLSTM,
+    PrototypeMLP,
+    PrototypeResNet,
+    PrototypeModelBase,
     PrototypeFeatureExtractor,
-    PrototypeSelector
+    PrototypeSelector,
 )
 
 
@@ -406,7 +411,7 @@ class Pipeline:
         self.data_loader(batch_size=32, balance=self._balance, balance_strategy=self._balance_strategy)
 
         # Re-initialize model
-        if issubclass(self.model_class, PrototypeBasedModel):
+        if issubclass(self.model_class, PrototypeModelBase):
             self.model = self.model_class(self.num_prototypes, self.n_vars, self.num_classes).to(self.device)
         else:
             self.model = self.model_class(self.window_size, self.n_vars, self.num_classes).to(self.device)
@@ -514,7 +519,7 @@ class Pipeline:
             self.preprocessing(normalize=normalize)
             self.data_loader(batch_size=batch_size, balance=balance, balance_strategy=balance_strategy)
 
-            if issubclass(self.model_class, PrototypeBasedModel):
+            if issubclass(self.model_class, PrototypeModelBase):
                 self.model = self.model_class(self.num_prototypes, self.n_vars, self.num_classes).to(self.device)
             else:
                 self.model = self.model_class(self.window_size, self.n_vars, self.num_classes).to(self.device)
@@ -546,7 +551,7 @@ class Pipeline:
             self.preprocessing(normalize=normalize)
             self.data_loader(batch_size=batch_size, balance=balance, balance_strategy=balance_strategy)
 
-            if issubclass(self.model_class, PrototypeBasedModel):
+            if issubclass(self.model_class, PrototypeModelBase):
                 self.model = self.model_class(self.num_prototypes, self.n_vars, self.num_classes).to(self.device)
             else:
                 self.model = self.model_class(self.window_size, self.n_vars, self.num_classes).to(self.device)
@@ -691,6 +696,13 @@ if __name__ == "__main__":
     # Prototype-based models
     selection_types = ["random", "k-means", "gmm"]
     distance_metrics = ["euclidean", "cosine"]
+    prototype_models = [
+        PrototypeResNet,
+        PrototypeCNN,
+        PrototypeLSTM,
+        PrototypeMLP,
+        PrototypeFCN,
+    ]
 
     for model_class in baseline_models:
         pipeline = Pipeline(
@@ -720,35 +732,39 @@ if __name__ == "__main__":
         results = pipeline.evaluate(threshold=bst_threshold)
         print(f"{model_class.__name__} results:", results)
 
-    for selection_type in selection_types:
-        for distance_metric in distance_metrics:
-            prototype_pipeline = Pipeline(
-                model_class=PrototypeBasedModel,
-                file_path=CSV_FILE_PATH_1,
-                n_vars=n_var_1,
-                num_classes=2,
-                result_dir=f"../Result/may/PrototypeModel/{selection_type}_{distance_metric}",
-                use_prototype=True,
-                num_prototypes=10,
-                prototype_selection_type=selection_type,
-                prototype_distance_metric=distance_metric
-            )
+    for proto_class in prototype_models:
+        for selection_type in selection_types:
+            for distance_metric in distance_metrics:
+                prototype_pipeline = Pipeline(
+                    model_class=proto_class,
+                    file_path=CSV_FILE_PATH_1,
+                    n_vars=n_var_1,
+                    num_classes=2,
+                    result_dir=f"../Result/may/{proto_class.__name__}/{selection_type}_{distance_metric}",
+                    use_prototype=True,
+                    num_prototypes=10,
+                    prototype_selection_type=selection_type,
+                    prototype_distance_metric=distance_metric,
+                )
 
-            prototype_pipeline.train(
-                use_hpo=True,
-                n_trials=10,
-                epochs=10,
-                batch_size=32,
-                patience=5,
-                normalize=True,
-                balance=True,
-                balance_strategy="over",
-                optimize_metric="f1",
-                cost_sensitive="weighted_ce"  # Example of weighted CE
-            )
-            bst_threshold = prototype_pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
-            proto_results = prototype_pipeline.evaluate(threshold=bst_threshold)
-            print(f"PrototypeModel-{selection_type}-{distance_metric} results:", proto_results)
+                prototype_pipeline.train(
+                    use_hpo=True,
+                    n_trials=10,
+                    epochs=10,
+                    batch_size=32,
+                    patience=5,
+                    normalize=True,
+                    balance=True,
+                    balance_strategy="over",
+                    optimize_metric="f1",
+                    cost_sensitive="weighted_ce",  # Example of weighted CE
+                )
+                bst_threshold = prototype_pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
+                proto_results = prototype_pipeline.evaluate(threshold=bst_threshold)
+                print(
+                    f"{proto_class.__name__}-{selection_type}-{distance_metric} results:",
+                    proto_results,
+                )
 
     # Daily
     for model_class in baseline_models:
@@ -782,32 +798,36 @@ if __name__ == "__main__":
         print(f"{model_class.__name__} results:", results)
 
     # Prototype-based models
-    for selection_type in selection_types:
-        for distance_metric in distance_metrics:
-            prototype_pipeline = Pipeline(
-                model_class=PrototypeBasedModel,
-                file_path=CSV_FILE_PATH_2,
-                n_vars=n_var_2,
-                num_classes=2,
-                result_dir=f"../Result/PrototypeModel/{selection_type}_{distance_metric}",
-                use_prototype=True,
-                num_prototypes=10,
-                prototype_selection_type=selection_type,
-                prototype_distance_metric=distance_metric
-            )
+    for proto_class in prototype_models:
+        for selection_type in selection_types:
+            for distance_metric in distance_metrics:
+                prototype_pipeline = Pipeline(
+                    model_class=proto_class,
+                    file_path=CSV_FILE_PATH_2,
+                    n_vars=n_var_2,
+                    num_classes=2,
+                    result_dir=f"../Result/{proto_class.__name__}/{selection_type}_{distance_metric}",
+                    use_prototype=True,
+                    num_prototypes=10,
+                    prototype_selection_type=selection_type,
+                    prototype_distance_metric=distance_metric,
+                )
 
-            prototype_pipeline.train(
-                use_hpo=True,
-                n_trials=10,
-                epochs=10,
-                batch_size=32,
-                patience=5,
-                normalize=True,
-                balance=True,
-                balance_strategy="over",
-                optimize_metric="f1",
-                cost_sensitive="weighted_ce"
-            )
-            bst_threshold = prototype_pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
-            proto_results = prototype_pipeline.evaluate(threshold=bst_threshold)
-            print(f"PrototypeModel-{selection_type}-{distance_metric} results:", proto_results)
+                prototype_pipeline.train(
+                    use_hpo=True,
+                    n_trials=10,
+                    epochs=10,
+                    batch_size=32,
+                    patience=5,
+                    normalize=True,
+                    balance=True,
+                    balance_strategy="over",
+                    optimize_metric="f1",
+                    cost_sensitive="weighted_ce",
+                )
+                bst_threshold = prototype_pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
+                proto_results = prototype_pipeline.evaluate(threshold=bst_threshold)
+                print(
+                    f"{proto_class.__name__}-{selection_type}-{distance_metric} results:",
+                    proto_results,
+                )
