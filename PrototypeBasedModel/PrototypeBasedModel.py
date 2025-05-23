@@ -311,9 +311,20 @@ class PrototypeFeatureExtractor:
 ###############################################################################
 # 3) PrototypeBasedModel
 ###############################################################################
-class PrototypeBasedModel(nn.Module):
+class PrototypeModelBase(nn.Module):
+    """Base class for all prototype-based models."""
+
+    pass
+
+
+###############################################################################
+# 3) Prototype Models
+###############################################################################
+
+class PrototypeBasedModel(PrototypeModelBase):
     """
-    Prototype-based model for time series classification.
+    Prototype-based model for time series classification using a ResNet
+    backbone. This was the original prototype-based model in the project.
     """
 
     def __init__(self, num_prototypes: int, n_var: int, num_classes: int):
@@ -445,3 +456,82 @@ class PrototypeBasedModel(nn.Module):
         outs.append(x.clone().detach())
 
         return outs
+
+
+###############################################################################
+# 4) Wrapper classes for baseline backbones
+###############################################################################
+
+class PrototypeCNN(PrototypeModelBase):
+    """Prototype model using the CNN baseline architecture."""
+
+    def __init__(self, num_prototypes: int, n_var: int, num_classes: int):
+        super().__init__()
+        from BaselineModel.CNN_baseline import CNN
+
+        self.backbone = CNN(num_prototypes, n_var, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
+
+
+class PrototypeFCN(PrototypeModelBase):
+    """Prototype model using the FCN baseline architecture."""
+
+    def __init__(self, num_prototypes: int, n_var: int, num_classes: int):
+        super().__init__()
+        from BaselineModel.FCN_baseline import FCN
+
+        self.backbone = FCN(num_prototypes, n_var, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
+
+
+class PrototypeLSTM(PrototypeModelBase):
+    """Prototype model using the LSTM baseline architecture."""
+
+    def __init__(self, num_prototypes: int, n_var: int, num_classes: int,
+                 hidden_dim: int = 128, num_layers: int = 2,
+                 dropout: float = 0.2, bidirectional: bool = False):
+        super().__init__()
+        from BaselineModel.LSTM_baseline import LSTM
+
+        self.backbone = LSTM(
+            window_size=num_prototypes,
+            n_vars=n_var,
+            num_classes=num_classes,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            dropout=dropout,
+            bidirectional=bidirectional,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
+
+
+class PrototypeMLP(PrototypeModelBase):
+    """Prototype model using the MLP baseline architecture."""
+
+    def __init__(self, num_prototypes: int, n_var: int, num_classes: int):
+        super().__init__()
+        from BaselineModel.MLP_baseline import MLP
+
+        self.backbone = MLP(num_prototypes, n_var, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
+
+
+class PrototypeResNet(PrototypeModelBase):
+    """Prototype model using the ResNet baseline architecture."""
+
+    def __init__(self, num_prototypes: int, n_var: int, num_classes: int):
+        super().__init__()
+        from BaselineModel.ResNet_baseline import ResNet
+
+        self.backbone = ResNet(num_prototypes, n_var, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
