@@ -14,6 +14,7 @@ def load_labelled_dataframe(csv_path: str) -> pd.DataFrame:
 
 
 def build_windows(df: pd.DataFrame, window_size: int = 600):
+    """Construct sliding windows and center labels."""
     feature_cols = ["Close", "High", "Low", "Open", "Volume"]
     half_w = window_size // 2
     X_list, y_list = [], []
@@ -36,7 +37,6 @@ def dtw_distance(a: np.ndarray, b: np.ndarray) -> float:
 
 def compute_shift_distances(X: np.ndarray, y: np.ndarray, shift: int = 3):
     indices = np.where(y == 1)[0]
-    half_w = X.shape[1] // 2
     results = []
     for idx in indices:
         base = X[idx]
@@ -47,6 +47,32 @@ def compute_shift_distances(X: np.ndarray, y: np.ndarray, shift: int = 3):
             dist = dtw_distance(base, comp)
             results.append({"offset": off, "distance": dist})
     return pd.DataFrame(results)
+
+def compute_tp_pair_distances(
+    X: np.ndarray, y: np.ndarray, num_pairs: int = 5, min_separation: int = 5
+) -> list:
+    """Compute DTW distances between several true-positive window pairs."""
+    indices = np.where(y == 1)[0]
+    if len(indices) < 2:
+        return []
+
+    # Build eligible pairs with a minimum separation to avoid overlap
+    eligible = [
+        (i, j)
+        for i in indices
+        for j in indices
+        if j > i and (j - i) > min_separation
+    ]
+    if not eligible:
+        return []
+
+    rng = np.random.default_rng(0)
+    chosen = rng.choice(len(eligible), size=min(num_pairs, len(eligible)), replace=False)
+    dists = []
+    for idx in chosen:
+        i, j = eligible[idx]
+        dists.append(dtw_distance(X[i], X[j]))
+    return dists
 
 
 def main():
@@ -63,6 +89,10 @@ def main():
     plt.savefig("dtw_shift_distances.png")
     print(pivot)
 
+    tp_dists = compute_tp_pair_distances(X, y, num_pairs=5, min_separation=5)
+    if tp_dists:
+        print("True-positive pair distances:", tp_dists)
+        print("Average TP distance:", np.mean(tp_dists))
 
 if __name__ == "__main__":
     main()
