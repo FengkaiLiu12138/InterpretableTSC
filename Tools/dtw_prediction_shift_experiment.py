@@ -101,7 +101,7 @@ def main():
     plt.title("DTW distance vs. offset")
     plt.tight_layout()
     plt.savefig("dtw_shift_distances.png")
-
+    print(pivot)
     plt.xlabel("Offset from true turning point")
     plt.ylabel("Average Euclidean distance")
     pivot = df_dist.pivot_table(index="offset", values="euclidean", aggfunc="mean")
@@ -109,7 +109,7 @@ def main():
     plt.title("Euclidean distance vs. offset")
     plt.tight_layout()
     plt.savefig("euclidean_shift_distances.png")
-
+    print(pivot)
     plt.xlabel("Offset from true turning point")
     plt.ylabel("Average Cosine distance")
     pivot = df_dist.pivot_table(index="offset", values="cosine", aggfunc="mean")
@@ -122,7 +122,11 @@ def main():
     tp_dists = compute_tp_pair_distances(X, y, num_pairs=5, min_separation=5)
     if tp_dists:
         print("True-positive pair distances:", tp_dists)
-        print("Average TP distance:", np.mean(tp_dists))
+        print("Average distances for true-positive pairs: for DTW: {:.2f}, Euclidean: {:.2f}, Cosine: {:.2f}".format(
+            np.mean([d[0] for d in tp_dists]),
+            np.mean([d[1] for d in tp_dists]),
+            np.mean([d[2] for d in tp_dists])
+        ))
 
 if __name__ == "__main__":
     main()
