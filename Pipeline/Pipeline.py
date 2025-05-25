@@ -577,7 +577,7 @@ class Pipeline:
             val_loss = self._train_loop(optimizer, criterion, epochs=epochs, patience=patience)
             return self.best_model, val_loss
 
-    def evaluate(self, threshold: float = 0.5, save_feature_maps: bool = False):
+    def evaluate(self, threshold: float = 0.5, save_feature_maps: bool = True):
         """
         Evaluate on the test set. We compute softmax => take class-1 probability => compare with threshold.
         Default threshold=0.5.
