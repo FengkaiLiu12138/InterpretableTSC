@@ -210,17 +210,25 @@ class PrototypeFeatureExtractor:
         else:
             raise ValueError(f"Unsupported metric: {metric}")
 
-    def plot_prototype_feature_map(self, metric='euclidean', save_path="prototype_feature_map.png"):
-        """
-        visualize prototype feature map
+    def plot_prototype_feature_map(self, metric='euclidean', save_path="prototype_feature_map.png", sample_idx: int = 0):
+        """Visualize a prototype feature map for a specific sample.
+
+        Parameters
+        ----------
+        metric : str
+            Distance metric used to compute the feature map.
+        save_path : str
+            Where to save the plotted heatmap.
+        sample_idx : int
+            Index of the sample to visualize. Defaults to ``0``.
         """
         features = self.compute_prototype_features(metric=metric)
-        if features.shape[0] == 0:
+        if features.shape[0] == 0 or sample_idx >= features.shape[0]:
             return
-        first_sample = features[0].cpu().numpy()
+        sample_feat = features[sample_idx].cpu().numpy()
 
         plt.figure(figsize=(6, 4))
-        sns.heatmap(first_sample, annot=False, cmap="viridis")
+        sns.heatmap(sample_feat, annot=False, cmap="viridis")
         plt.title(f"Prototype Feature Map ({metric})")
         plt.xlabel("Feature Dimension")
         plt.ylabel("Prototype Index")

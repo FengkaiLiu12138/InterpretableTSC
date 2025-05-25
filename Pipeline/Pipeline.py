@@ -204,10 +204,14 @@ class Pipeline:
             t_data = torch.from_numpy(rem_data)
             t_proto = torch.from_numpy(protos)
             extractor = PrototypeFeatureExtractor(t_data, t_proto)
-            extractor.plot_prototype_feature_map(
-                metric=self.prototype_distance_metric,
-                save_path=os.path.join(self.result_dir, "prototype_feature_map.png")
-            )
+            # Save feature maps for several samples for later analysis
+            n_feat_samples = min(10, t_data.shape[0])
+            for idx in range(n_feat_samples):
+                extractor.plot_prototype_feature_map(
+                    metric=self.prototype_distance_metric,
+                    save_path=os.path.join(self.result_dir, f"prototype_feature_map_{idx}.png"),
+                    sample_idx=idx,
+                )
             extractor.plot_prototype_cycles(
                 save_dir=self.result_dir,
                 short_window=30,
@@ -573,7 +577,7 @@ class Pipeline:
             val_loss = self._train_loop(optimizer, criterion, epochs=epochs, patience=patience)
             return self.best_model, val_loss
 
-    def evaluate(self, threshold: float = 0.5):
+    def evaluate(self, threshold: float = 0.5, save_feature_maps: bool = False):
         """
         Evaluate on the test set. We compute softmax => take class-1 probability => compare with threshold.
         Default threshold=0.5.
@@ -583,6 +587,10 @@ class Pipeline:
         self.model.eval()
 
         preds, labels = [], []
+        sample_idx = 0
+        if save_feature_maps and self.use_prototype:
+            fmap_dir = os.path.join(self.result_dir, "test_feature_maps")
+            os.makedirs(fmap_dir, exist_ok=True)
         with torch.no_grad():
             for x, y in self.test_loader:
                 x, y = x.to(self.device).float(), y.to(self.device)
@@ -592,6 +600,22 @@ class Pipeline:
                 pred = (probs >= threshold).long()
                 preds.extend(pred.cpu().numpy())
                 labels.extend(y.cpu().numpy())
+
+                if save_feature_maps and self.use_prototype:
+                    for i in range(x.size(0)):
+                        fmap = x[i].cpu().numpy()
+                        label_str = "true" if pred[i].item() == 1 else "false"
+                        fname = f"sample_{sample_idx}_{label_str}.png"
+                        fpath = os.path.join(fmap_dir, fname)
+                        plt.figure(figsize=(6, 4))
+                        sns.heatmap(fmap, annot=False, cmap="viridis")
+                        plt.title(f"Sample {sample_idx} - {label_str}")
+                        plt.xlabel("Feature Dimension")
+                        plt.ylabel("Prototype Index")
+                        plt.tight_layout()
+                        plt.savefig(fpath)
+                        plt.close()
+                        sample_idx += 1
 
         preds = np.array(preds)
         labels = np.array(labels)
