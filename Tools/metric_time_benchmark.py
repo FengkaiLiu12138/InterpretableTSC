@@ -7,20 +7,17 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 
-ROOT = os.path.dirname(os.path.dirname(__file__))
-sys.path.append(ROOT)
-
 from PrototypeBasedModel import PrototypeFeatureExtractor
 
 
-DATA_PATH = "Dataset/ftse_minute_data_daily.csv"
+DATA_PATH = "../Dataset/ftse_minute_data_daily.csv"
 
 
 def _prepare_tensors(
     csv_path: str,
-    window_size: int = 60,
-    num_samples: int = 50,
-    num_prototypes: int = 5,
+    window_size: int = 600,
+    num_samples: int = 1,
+    num_prototypes: int = 10,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Load CSV and create sample windows and prototypes."""
     df = pd.read_csv(csv_path, header=None)
@@ -58,14 +55,14 @@ def main() -> None:
     times = _time_metrics(ts, protos, metrics)
 
     df = pd.DataFrame(times, columns=["metric", "time_seconds"])
-    df.to_csv("Tools/metric_time_results.csv", index=False)
+    df.to_csv("../Tools/metric_time_results.csv", index=False)
 
     plt.figure(figsize=(6, 4))
     plt.bar(df["metric"], df["time_seconds"], color="skyblue")
     plt.ylabel("Time (s)")
     plt.title("Metric Computation Time")
     plt.tight_layout()
-    plt.savefig("Tools/metric_time_plot.png")
+    plt.savefig("../Tools/metric_time_plot.png")
     plt.close()
 
     print(df)
