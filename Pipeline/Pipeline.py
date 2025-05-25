@@ -604,7 +604,17 @@ class Pipeline:
                 if save_feature_maps and self.use_prototype:
                     for i in range(x.size(0)):
                         fmap = x[i].cpu().numpy()
-                        label_str = "true" if pred[i].item() == 1 else "false"
+                        pred_label = pred[i].item()
+                        true_label = y[i].item()
+                        if pred_label == 1 and true_label == 1:
+                            label_str = "TP"
+                        elif pred_label == 1 and true_label == 0:
+                            label_str = "FP"
+                        elif pred_label == 0 and true_label == 1:
+                            label_str = "FN"
+                        else:
+                            label_str = "TN"
+
                         fname = f"sample_{sample_idx}_{label_str}.png"
                         fpath = os.path.join(fmap_dir, fname)
                         plt.figure(figsize=(6, 4))
