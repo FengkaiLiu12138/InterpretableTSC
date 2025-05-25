@@ -48,7 +48,6 @@ def compute_shift_distances(X: np.ndarray, y: np.ndarray, shift: int = 3):
             results.append({"offset": off, "distance": dist})
     return pd.DataFrame(results)
 
-
 def compute_tp_pair_distances(
     X: np.ndarray, y: np.ndarray, num_pairs: int = 5, min_separation: int = 5
 ) -> list:
@@ -77,7 +76,7 @@ def compute_tp_pair_distances(
 
 
 def main():
-    csv_path = os.path.join(os.path.dirname(__file__), "..", "Dataset", "ftse_minute_data_daily.csv")
+    csv_path = os.path.join("..", "Dataset", "ftse_minute_data_daily.csv")
     df = load_labelled_dataframe(csv_path)
     X, y = build_windows(df, window_size=600)
     df_dist = compute_shift_distances(X, y, shift=5)
@@ -94,7 +93,6 @@ def main():
     if tp_dists:
         print("True-positive pair distances:", tp_dists)
         print("Average TP distance:", np.mean(tp_dists))
-
 
 if __name__ == "__main__":
     main()
