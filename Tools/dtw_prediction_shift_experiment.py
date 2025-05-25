@@ -34,6 +34,18 @@ def dtw_distance(a: np.ndarray, b: np.ndarray) -> float:
         dist += d
     return dist
 
+def euclidean_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute Euclidean distance between two windows."""
+    return np.linalg.norm(a - b, axis=0).sum()
+
+def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute cosine distance between two windows."""
+    dot_product = np.dot(a.flatten(), b.flatten())
+    norm_a = np.linalg.norm(a.flatten())
+    norm_b = np.linalg.norm(b.flatten())
+    if norm_a == 0 or norm_b == 0:
+        return float('inf')  # Avoid division by zero
+    return 1 - (dot_product / (norm_a * norm_b))
 
 def compute_shift_distances(X: np.ndarray, y: np.ndarray, shift: int = 3):
     indices = np.where(y == 1)[0]
@@ -44,8 +56,10 @@ def compute_shift_distances(X: np.ndarray, y: np.ndarray, shift: int = 3):
             if idx + off < 0 or idx + off >= len(X):
                 continue
             comp = X[idx + off]
-            dist = dtw_distance(base, comp)
-            results.append({"offset": off, "distance": dist})
+            dtw_dist = dtw_distance(base, comp)
+            euc_dist = euclidean_distance(base, comp)
+            cos_dist = cosine_distance(base, comp)
+            results.append({"offset": off, "dtw": dtw_dist, "euclidean": euc_dist, "cosine": cos_dist})
     return pd.DataFrame(results)
 
 def compute_tp_pair_distances(
@@ -71,7 +85,7 @@ def compute_tp_pair_distances(
     dists = []
     for idx in chosen:
         i, j = eligible[idx]
-        dists.append(dtw_distance(X[i], X[j]))
+        dists.append([dtw_distance(X[i], X[j]), euclidean_distance(X[i], X[j]), cosine_distance(X[i], X[j])])
     return dists
 
 
@@ -80,13 +94,29 @@ def main():
     df = load_labelled_dataframe(csv_path)
     X, y = build_windows(df, window_size=600)
     df_dist = compute_shift_distances(X, y, shift=5)
-    pivot = df_dist.pivot_table(index="offset", values="distance", aggfunc="mean")
+    pivot = df_dist.pivot_table(index="offset", values="dtw", aggfunc="mean")
     pivot.plot(kind="bar", rot=0)
     plt.xlabel("Offset from true turning point")
     plt.ylabel("Average DTW distance")
     plt.title("DTW distance vs. offset")
     plt.tight_layout()
     plt.savefig("dtw_shift_distances.png")
+
+    plt.xlabel("Offset from true turning point")
+    plt.ylabel("Average Euclidean distance")
+    pivot = df_dist.pivot_table(index="offset", values="euclidean", aggfunc="mean")
+    pivot.plot(kind="bar", rot=0)
+    plt.title("Euclidean distance vs. offset")
+    plt.tight_layout()
+    plt.savefig("euclidean_shift_distances.png")
+
+    plt.xlabel("Offset from true turning point")
+    plt.ylabel("Average Cosine distance")
+    pivot = df_dist.pivot_table(index="offset", values="cosine", aggfunc="mean")
+    pivot.plot(kind="bar", rot=0)
+    plt.title("Cosine distance vs. offset")
+    plt.tight_layout()
+    plt.savefig("cosine_shift_distances.png")
     print(pivot)
 
     tp_dists = compute_tp_pair_distances(X, y, num_pairs=5, min_separation=5)

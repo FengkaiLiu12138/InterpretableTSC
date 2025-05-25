@@ -30,6 +30,7 @@ def _prepare_tensors(
             break
         segments.append(values[start:end])
     segments = torch.tensor(segments)
+    print(f"Loaded {len(segments)} segments of shape {segments.shape}")
     samples = segments[:num_samples]
     protos = segments[num_samples : num_samples + num_prototypes]
     return samples, protos
@@ -51,21 +52,25 @@ def _time_metrics(
 
 def main() -> None:
     metrics = ["euclidean", "cosine", "dtw"]
-    ts, protos = _prepare_tensors(DATA_PATH)
-    times = _time_metrics(ts, protos, metrics)
+    num_samples = [1, 10, 100, 1000]
+    for n in num_samples:
+        ts, protos = _prepare_tensors(DATA_PATH, num_samples=n)
+        times = _time_metrics(ts, protos, metrics)
 
-    df = pd.DataFrame(times, columns=["metric", "time_seconds"])
-    df.to_csv("../Tools/metric_time_results.csv", index=False)
+        df = pd.DataFrame(times, columns=["metric", "time_seconds"])
+        save_path = f"../Tools/{n}_samples/"
+        os.makedirs(save_path, exist_ok=True)
+        df.to_csv(f"../Tools/{n}_samples/metric_time_results.csv", index=False)
 
-    plt.figure(figsize=(6, 4))
-    plt.bar(df["metric"], df["time_seconds"], color="skyblue")
-    plt.ylabel("Time (s)")
-    plt.title("Metric Computation Time")
-    plt.tight_layout()
-    plt.savefig("../Tools/metric_time_plot.png")
-    plt.close()
+        plt.figure(figsize=(6, 4))
+        plt.bar(df["metric"], df["time_seconds"], color="skyblue")
+        plt.ylabel("Time (s)")
+        plt.title("Metric Computation Time")
+        plt.tight_layout()
+        plt.savefig(f"../Tools/{n}_samples/metric_time_plot.png")
+        plt.close()
 
-    print(df)
+        print(df)
 
 
 if __name__ == "__main__":
