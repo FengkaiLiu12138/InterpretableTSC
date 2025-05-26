@@ -275,6 +275,42 @@ class PrototypeFeatureExtractor:
             plt.savefig(save_path)
             plt.close()
 
+    def plot_prototype_series(
+        self,
+        save_dir: str = '.',
+        prefix: str = 'prototype_raw'
+    ):
+        """Plot each prototype's raw time series.
+
+        Parameters
+        ----------
+        save_dir : str
+            Directory to save the plots.
+        prefix : str
+            Prefix for the saved file names.
+        """
+        os.makedirs(save_dir, exist_ok=True)
+        num_prototypes = self.prototypes.shape[0]
+        for idx in range(num_prototypes):
+            proto = self.prototypes[idx]
+            if isinstance(proto, torch.Tensor):
+                proto_np = proto.cpu().numpy()
+            else:
+                proto_np = proto
+
+            plt.figure(figsize=(8, 4))
+            for c in range(proto_np.shape[1]):
+                plt.plot(proto_np[:, c], label=f'Var{c}')
+            plt.axvline(proto_np.shape[0] // 2, color='red', linestyle=':', label='center')
+            plt.title(f'Prototype {idx}')
+            plt.xlabel('Time Step')
+            plt.ylabel('Value')
+            plt.legend()
+            plt.tight_layout()
+            save_path = os.path.join(save_dir, f'{prefix}_{idx}.png')
+            plt.savefig(save_path)
+            plt.close()
+
     def _compute_euclidean_features(self):
         B, T, C = self.time_series.shape
         num_prototypes = self.prototypes.shape[0]
