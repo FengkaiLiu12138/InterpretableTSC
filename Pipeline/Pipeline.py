@@ -218,6 +218,10 @@ class Pipeline:
                 long_window=120,
                 prefix="prototype_cycle"
             )
+            extractor.plot_prototype_series(
+                save_dir=self.result_dir,
+                prefix="prototype_raw"
+            )
             feats = extractor.compute_prototype_features(metric=self.prototype_distance_metric)
             X = feats.numpy()
             y = rem_labels
