@@ -581,6 +581,23 @@ class Pipeline:
             val_loss = self._train_loop(optimizer, criterion, epochs=epochs, patience=patience)
             return self.best_model, val_loss
 
+    def predict_proba(self):
+        """Return class-1 probabilities for the test set."""
+        if self.test_loader is None:
+            raise ValueError("Call data_loader() before predict_proba().")
+        self.model.eval()
+        probs = []
+        labels = []
+        with torch.no_grad():
+            for x, y in self.test_loader:
+                x = x.to(self.device).float()
+                y = y.to(self.device)
+                logits = self.model(x)
+                p = torch.softmax(logits, dim=1)[:, 1]
+                probs.extend(p.cpu().numpy())
+                labels.extend(y.cpu().numpy())
+        return np.array(probs), np.array(labels)
+
     def evaluate(self, threshold: float = 0.5, save_feature_maps: bool = True):
         """
         Evaluate on the test set. We compute softmax => take class-1 probability => compare with threshold.
