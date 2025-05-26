@@ -30,9 +30,14 @@ class PrototypeSelector:
         """
         Select prototypes from the dataset based on the specified method and remove them from the dataset.
 
-        Args:
-            num_prototypes (int): number of prototypes to select
-            selection_type (str): 'random' / 'k-means' / 'gmm'
+        Args
+        ----
+        num_prototypes : int
+            Number of prototypes to select.
+        selection_type : str
+            Prototype selection strategy. Options are
+            ``'random'`` (default), ``'positive'``/``'pos-only'``/``'positive_only'``
+            for drawing only from the positive class, ``'k-means'`` and ``'gmm'``.
 
         Returns:
             prototypes (ndarray): shape (num_prototypes, ...)
@@ -42,6 +47,8 @@ class PrototypeSelector:
         """
         if selection_type == 'random':
             return self.random_selection(num_prototypes)
+        elif selection_type in ['positive', 'pos-only', 'positive_only']:
+            return self.random_selection(num_prototypes, positive_only=True)
         elif selection_type == 'k-means':
             return self.k_means_selection(num_prototypes)
         elif selection_type == 'gmm':
@@ -49,33 +56,52 @@ class PrototypeSelector:
         else:
             raise ValueError(f"Unsupported selection type: {selection_type}")
 
-    def random_selection(self, num_prototypes):
+    def random_selection(self, num_prototypes, positive_only: bool = False):
         """
-        Randomly select prototypes from the dataset, trying to get a roughly equal
-        number of positive and negative samples (if possible).
+        Randomly select prototypes from the dataset.
 
-        Returns:
-            prototypes, prototype_labels, remaining_data, remaining_labels
+        If ``positive_only`` is ``True`` all prototypes are drawn from the
+        positive class. Otherwise the method tries to select a roughly equal
+        number of positive and negative samples when possible.
+
+        Returns
+        -------
+        prototypes : ndarray
+            Selected prototype samples.
+        prototype_labels : ndarray
+            Labels corresponding to ``prototypes``.
+        remaining_data : ndarray
+            Data that was not selected as prototypes.
+        remaining_labels : ndarray
+            Labels for ``remaining_data``.
         """
         pos_idx = np.where(self.labels == 1)[0]
         neg_idx = np.where(self.labels == 0)[0]
         np.random.shuffle(pos_idx)
         np.random.shuffle(neg_idx)
 
-        half = num_prototypes // 2
-        num_pos = min(half, len(pos_idx))
-        num_neg = num_prototypes - num_pos
-        num_neg = min(num_neg, len(neg_idx))
+        if positive_only:
+            if len(pos_idx) >= num_prototypes:
+                selected_idx = pos_idx[:num_prototypes]
+            else:
+                selected_idx = pos_idx.copy()
+                extra = np.random.choice(pos_idx, num_prototypes - len(pos_idx), replace=True)
+                selected_idx = np.concatenate([selected_idx, extra])
+        else:
+            half = num_prototypes // 2
+            num_pos = min(half, len(pos_idx))
+            num_neg = num_prototypes - num_pos
+            num_neg = min(num_neg, len(neg_idx))
 
-        selected_pos = pos_idx[:num_pos]
-        selected_neg = neg_idx[:num_neg]
-        selected_idx = np.concatenate([selected_pos, selected_neg])
+            selected_pos = pos_idx[:num_pos]
+            selected_neg = neg_idx[:num_neg]
+            selected_idx = np.concatenate([selected_pos, selected_neg])
 
-        remainder = num_prototypes - len(selected_idx)
-        if remainder > 0:
-            leftover_idx = np.concatenate([pos_idx[num_pos:], neg_idx[num_neg:]])
-            np.random.shuffle(leftover_idx)
-            selected_idx = np.concatenate([selected_idx, leftover_idx[:remainder]])
+            remainder = num_prototypes - len(selected_idx)
+            if remainder > 0:
+                leftover_idx = np.concatenate([pos_idx[num_pos:], neg_idx[num_neg:]])
+                np.random.shuffle(leftover_idx)
+                selected_idx = np.concatenate([selected_idx, leftover_idx[:remainder]])
 
         prototypes = self.data[selected_idx]
         prototype_labels = self.labels[selected_idx]
