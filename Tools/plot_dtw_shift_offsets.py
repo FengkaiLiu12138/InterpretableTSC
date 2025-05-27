@@ -108,7 +108,6 @@ def main() -> None:
     plt.tight_layout()
     plt.savefig(os.path.join("figures", "dtw_shift_offsets.png"))
     plt.close()
-
     print(pivot)
     print("Average DTW distance between TP pairs:", mean_tp_dtw)
 
