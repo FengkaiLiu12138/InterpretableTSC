@@ -19,16 +19,16 @@ def _train_and_predict(model_cls: type[PrototypeModelBase], sel: str, metric: st
     """Train a single model and return its test probabilities and labels."""
     pipe = Pipeline(
         model_class=model_cls,
-        file_path="../Dataset/ftse_minute_data_daily.csv",
+        file_path="../Dataset/ftse_minute_data_daily_labelled.csv",
         n_vars=5,
         num_classes=2,
-        result_dir=f"../Result/{model_cls.__name__}/{sel}_{metric}",
+        result_dir=f"../Result/ensemble/{model_cls.__name__}/{sel}_{metric}",
         use_prototype=True,
         num_prototypes=10,
         prototype_selection_type=sel,
         prototype_distance_metric=metric,
     )
-    pipe.train(epochs=10, batch_size=32, balance=True, balance_strategy="over", normalize=True)
+    pipe.train(epochs=10, batch_size=32, balance=True, balance_strategy="over", normalize=True, use_hpo=True, n_trials=10)
     pipe.evaluate(threshold=0.5)
     probs, labels = pipe.predict_proba()
     return probs, labels
