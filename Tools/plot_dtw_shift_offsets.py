@@ -87,25 +87,23 @@ def main() -> None:
     tp_dists = compute_tp_pair_distances(X, y, num_pairs=5, min_separation=5)
     mean_tp_dtw = np.mean(tp_dists) if tp_dists else 0.0
 
-    fig, ax_left = plt.subplots(figsize=(6, 4))
-    bars = ax_left.bar(pivot.index, pivot["dtw"], color="skyblue", label="Neighbour DTW")
-    ax_left.set_xlabel("Offset from true turning point")
-    ax_left.set_ylabel("Average DTW distance", color="skyblue")
-    ax_left.tick_params(axis="y", labelcolor="skyblue")
-
-    ax_right = ax_left.twinx()
-    ax_right.axhline(mean_tp_dtw, color="red", ls="--",
-                     label=f"Avg TP DTW = {mean_tp_dtw:.2f}")
-    ax_right.set_ylabel("Average TP DTW", color="red")
-    ax_right.tick_params(axis="y", labelcolor="red")
-
-    lines, labels = [], []
-    for ax in [ax_left, ax_right]:
-        line, label = ax.get_legend_handles_labels()
-        lines += line
-        labels += label
-    ax_left.legend(lines, labels, loc="upper right")
+    plt.figure(figsize=(6, 4))
+    bars = plt.bar(pivot.index, pivot["dtw"], color="skyblue")
+    for b in bars:
+        height = b.get_height()
+        plt.text(
+            b.get_x() + b.get_width() / 2,
+            height,
+            f"{height:.2f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+    plt.axhline(mean_tp_dtw, color="r", ls="--", label=f"Avg TP DTW = {mean_tp_dtw:.2f}")
+    plt.xlabel("Offset from true turning point")
+    plt.ylabel("Average DTW distance")
     plt.title("DTW distance vs offset")
+    plt.legend()
     os.makedirs("figures", exist_ok=True)
     plt.tight_layout()
     plt.savefig(os.path.join("figures", "dtw_shift_offsets.png"))
