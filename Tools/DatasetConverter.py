@@ -79,8 +79,26 @@ class DatasetConverter:
         volume: Whether to include volume in the dataset
         """
         try:
-            # Load the dataset
+            # Load the dataset. Some CSVs in this project do not have a header
+            # row. We first attempt the default pandas loading behaviour. If the
+            # inferred column names look like data entries (e.g. a date string),
+            # we reload with ``header=None`` and assign proper column names.
             data = pd.read_csv(self.file_path)
+            first_col = str(data.columns[0])
+            if first_col[0].isdigit() and "-" in first_col:
+                data = pd.read_csv(self.file_path, header=None)
+                if data.shape[1] >= 6:
+                    # Assume the first column is date/time and drop it
+                    data.columns = [
+                        "Date",
+                        "Close",
+                        "High",
+                        "Low",
+                        "Open",
+                        "Volume",
+                    ][: data.shape[1]]
+                else:
+                    data.columns = list(range(data.shape[1]))
 
             # Check if the dataset has label columns
             if 'Labels' in data.columns:
