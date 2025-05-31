@@ -35,8 +35,8 @@ def run_single_experiment(num_proto: int, sel: str, metric: str, data_path: str)
         prototype_selection_type=sel,
         prototype_distance_metric=metric,
     )
-    pipe.train(use_hpo=True, n_trials=10, epochs=10, batch_size=32, balance=True,
-               balance_strategy="over", normalize=True, optimize_metric="f1")
+    pipe.train(epochs=50, batch_size=32, balance=True,
+               balance_strategy="smote", normalize=True, optimize_metric="f1")
     best_th = pipe.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
     results = pipe.evaluate(threshold=best_th)
     return results["f1"]
