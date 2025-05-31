@@ -8,8 +8,8 @@ from Tools.DatasetConverter import DatasetConverter
 
 
 PROTOTYPE_COUNTS = [10, 20, 30, 40, 50]
-SELECTION_TYPES = ["random", "positive_only", "k-means", "gmm"]
-DISTANCE_METRICS = ["euclidean", "cosine", "dtw"]
+SELECTION_TYPES = ["random", "k-means", "gmm"]
+DISTANCE_METRICS = ["euclidean", "cosine"]
 
 
 def ensure_labelled(csv_path: str, labelled_path: str) -> str:
