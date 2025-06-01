@@ -40,11 +40,15 @@ def plot_label_distribution(
     width = 0.35
 
     plt.figure(figsize=(6, 4))
-    plt.bar([i - width / 2 for i in x], values1, width=width, label='Dataset 1')
-    plt.bar([i + width / 2 for i in x], values2, width=width, label='Dataset 2')
+    plt.bar([i - width / 2 for i in x], values1, width=width, label='Daily')
+    plt.bar([i + width / 2 for i in x], values2, width=width, label='Minute')
+    for i, v in enumerate(values1):
+        plt.text(i - width / 2, v + 0.05, str(v), ha='center', va='bottom')
+    for i, v in enumerate(values2):
+        plt.text(i + width / 2, v + 0.05, str(v), ha='center', va='bottom')
     plt.xlabel('Label')
     plt.ylabel('Count')
-    plt.title('Label Distribution Comparison')
+    plt.title('Label Distribution for Both Datasets')
     plt.xticks(list(x), labels)
     plt.legend()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)

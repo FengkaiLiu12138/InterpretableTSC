@@ -49,7 +49,6 @@ def _plot_windows(windows: np.ndarray, labels: np.ndarray, out_dir: str = 'figur
         plt.figure(figsize=(8, 2))
         plt.plot(window[:, 0], label='Close')
         plt.axvline(WINDOW_SIZE // 2, color='r', ls='--')
-        plt.title(f'Window {i} - label {label}')
         plt.legend()
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, f'window_{i}_label_{label}.png'))
@@ -59,7 +58,7 @@ def _plot_windows(windows: np.ndarray, labels: np.ndarray, out_dir: str = 'figur
 def main() -> None:
     df = _load_dataframe()
     X, y = _build_windows(df, window_size=WINDOW_SIZE)
-    windows, labels = _sample_windows(X, y, num_each=2, seed=0)
+    windows, labels = _sample_windows(X, y, num_each=2, seed=42)
     _plot_windows(windows, labels)
 
 
