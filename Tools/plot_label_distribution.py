@@ -1,24 +1,36 @@
 import os
-import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from Tools.DatasetConverter import DatasetConverter
 
+# Default labelled datasets used for demonstration. These paths can be
+# overridden via command line arguments.
 DATASET_1 = os.path.join('..', 'Dataset', 'ftse_minute_data_may_labelled.csv')
 DATASET_2 = os.path.join('..', 'Dataset', 'ftse_minute_data_daily_labelled.csv')
 
 
 def _load_counts(csv_path: str) -> pd.Series:
-    dc = DatasetConverter(file_path=csv_path, save_path=None)
-    df = dc.convert(label_type=1, volume=True)
-    return df['Labels'].value_counts().sort_index()
+    """Load label counts from a labelled CSV file.
+
+    The function expects a column named ``Labels``. Only this column is
+    required, making the loader resilient to different feature sets.
+    """
+
+    df = pd.read_csv(csv_path)
+    if "Labels" not in df.columns:
+        raise ValueError(f"Expected column 'Labels' in {csv_path}")
+    return df["Labels"].value_counts().sort_index()
 
 
-def plot_label_distribution(out_path: str = os.path.join('figures', 'label_distribution.png')) -> None:
-    counts1 = _load_counts(DATASET_1)
-    counts2 = _load_counts(DATASET_2)
+def plot_label_distribution(
+    dataset_1: str = DATASET_1,
+    dataset_2: str = DATASET_2,
+    out_path: str = os.path.join("figures", "label_distribution.png"),
+) -> None:
+    """Plot label count comparison for two labelled datasets."""
+
+    counts1 = _load_counts(dataset_1)
+    counts2 = _load_counts(dataset_2)
     labels = sorted(set(counts1.index).union(counts2.index))
 
     values1 = counts1.reindex(labels, fill_value=0)
