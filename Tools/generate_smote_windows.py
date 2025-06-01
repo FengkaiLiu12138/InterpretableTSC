@@ -1,7 +1,10 @@
+import os
 import numpy as np
+import matplotlib.pyplot as plt
 from Tools.DatasetConverter import DatasetConverter
 
-DATA_PATH = 'Dataset/ftse_minute_data_daily.csv'
+DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'Dataset', 'ftse_minute_data_daily.csv')
+
 WINDOW_SIZE = 600
 FEATURE_COLS = ["Close", "High", "Low", "Open", "Volume"]
 
@@ -43,6 +46,20 @@ def simple_smote(X, y, random_state=42):
     return X_bal, y_bal, X_syn
 
 
+def plot_window(window: np.ndarray, idx: int, out_dir: str = 'figures') -> None:
+    os.makedirs(out_dir, exist_ok=True)
+    plt.figure(figsize=(8, 3))
+    for col_idx, name in enumerate(FEATURE_COLS):
+        plt.plot(window[:, col_idx], label=name)
+    plt.axvline(WINDOW_SIZE // 2, color='r', ls=':')
+    plt.xlabel('Time Step')
+    plt.title(f'SMOTE Window {idx}')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f'smote_window_{idx}.png'))
+    plt.close()
+
+
 def main():
     dc = DatasetConverter(file_path=DATA_PATH, save_path=None)
     df = dc.convert(label_type=1, volume=True)
@@ -54,7 +71,7 @@ def main():
     for idx, win in enumerate(X_syn[:2], 1):
         print(f"\nSynthetic window {idx} (shape {win.shape}):")
         print(win)
-
+        plot_window(win, idx)
 
 if __name__ == '__main__':
     main()
