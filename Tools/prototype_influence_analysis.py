@@ -75,6 +75,7 @@ def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
     fig = plt.figure(figsize=(10, 2 * N_SHOW))
     gs = gridspec.GridSpec(N_SHOW, 2, width_ratios=[1, 1], wspace=0.3)
 
+
     proto_axes = []
     top_idx = np.argsort(np.abs(contrib))[-N_SHOW:][::-1]
     for row, i in enumerate(top_idx):
