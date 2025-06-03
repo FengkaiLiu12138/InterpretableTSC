@@ -16,6 +16,7 @@ from PrototypeBasedModel import PrototypeSelector, PrototypeFeatureExtractor
 DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'Dataset', 'ftse_minute_data_daily.csv')
 WINDOW_SIZE = 600
 N_PROTOTYPES = 10
+N_SHOW_PROTOTYPES = 5
 TEST_RATIO = 0.2
 
 
@@ -69,28 +70,60 @@ def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
     colors = ['green' if c >= 0 else 'red' for c in contrib]
     from matplotlib import gridspec
 
-    cols = 2
-    rows = int(np.ceil(N_PROTOTYPES / cols))
+    N_SHOW = min(N_SHOW_PROTOTYPES, len(protos))
 
-    fig = plt.figure(figsize=(cols * 6, rows * 2 + 3))
-    gs = gridspec.GridSpec(rows + 1, cols, hspace=0.6, wspace=0.4)
+    fig = plt.figure(figsize=(30, 2 * N_SHOW))
+    gs = gridspec.GridSpec(N_SHOW, 2, width_ratios=[1, 2.5], wspace=0.3)
 
-    for i in range(N_PROTOTYPES):
-        r, c = divmod(i, cols)
-        ax_p = fig.add_subplot(gs[r, c])
+    proto_axes = []
+    top_idx = np.argsort(np.abs(contrib))[-N_SHOW:][::-1]
+    for row, i in enumerate(top_idx):
+        ax_p = fig.add_subplot(gs[row, 0])
         ax_p.plot(protos[i, :, 0], color='blue')
         ax_p.axvline(WINDOW_SIZE // 2, color='red', ls=':')
-        ax_p.set_title(f'P{i}  [{contrib[i]:.2f}]', color=colors[i])
+        ax_p.set_ylabel(f'P{i}', rotation=0, labelpad=15, va='center')
         ax_p.set_xticks([])
-        ax_p.set_yticks([])
+        proto_axes.append((ax_p, i))
 
-    ax_test = fig.add_subplot(gs[rows, :])
+    ax_test = fig.add_subplot(gs[:, 1])
     ax_test.plot(X_te[idx, :, 0], color='black')
     ax_test.axvline(WINDOW_SIZE // 2, color='red', ls=':')
     ax_test.set_title(f'Test sample {idx}\nProb={prob:.2f} -> Class {pred}')
     ax_test.set_xticks([])
 
-    plt.tight_layout()
+    from matplotlib.patches import ConnectionPatch
+    for ax_p, i in proto_axes:
+        x = WINDOW_SIZE // 2
+        y_proto = protos[i, x, 0]
+        y_sample = X_te[idx, x, 0]
+
+        con = ConnectionPatch(
+            xyA=(x, y_proto),
+            coordsA="data",
+            axesA=ax_p,
+            xyB=(x, y_sample),
+            coordsB="data",
+            axesB=ax_test,
+            color=colors[i],
+            lw=1,
+        )
+        fig.add_artist(con)
+
+        pt_a = ax_p.transData.transform((x, y_proto))
+        pt_b = ax_test.transData.transform((x, y_sample))
+        mid = (pt_a + pt_b) / 2
+        mid_fig = fig.transFigure.inverted().transform(mid)
+        fig.text(
+            mid_fig[0],
+            mid_fig[1],
+            f"{contrib[i]:.2f}",
+            ha="center",
+            va="center",
+            color=colors[i],
+            fontsize=8,
+        )
+
+    plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
     plt.savefig(os.path.join('figures', 'sample_contribution_grid.png'))
     plt.close()
 
