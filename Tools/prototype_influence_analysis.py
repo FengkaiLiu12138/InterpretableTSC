@@ -69,31 +69,22 @@ def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
     colors = ['green' if c >= 0 else 'red' for c in contrib]
     from matplotlib import gridspec
 
-    fig = plt.figure(figsize=(50, 2 * N_PROTOTYPES))
-    gs = gridspec.GridSpec(N_PROTOTYPES, 3, width_ratios=[1, 0.4, 2], wspace=0.3)
+    cols = 2
+    rows = int(np.ceil(N_PROTOTYPES / cols))
+
+    fig = plt.figure(figsize=(cols * 6, rows * 2 + 3))
+    gs = gridspec.GridSpec(rows + 1, cols, hspace=0.6, wspace=0.4)
 
     for i in range(N_PROTOTYPES):
-        ax_p = fig.add_subplot(gs[i, 0])
+        r, c = divmod(i, cols)
+        ax_p = fig.add_subplot(gs[r, c])
         ax_p.plot(protos[i, :, 0], color='blue')
         ax_p.axvline(WINDOW_SIZE // 2, color='red', ls=':')
-        ax_p.set_ylabel(f'P{i}', rotation=0, labelpad=20, va='center')
+        ax_p.set_title(f'P{i}  [{contrib[i]:.2f}]', color=colors[i])
         ax_p.set_xticks([])
+        ax_p.set_yticks([])
 
-        ax_b = fig.add_subplot(gs[i, 1])
-        ax_b.barh([0], [contrib[i]], color=colors[i])
-        ax_b.set_xlim(min(0, contrib.min()) - 0.1, max(0, contrib.max()) + 0.1)
-        ax_b.set_yticks([])
-        ax_b.set_xticks([])
-        ax_b.text(
-            contrib[i],
-            0,
-            f'{contrib[i]:.2f}',
-            va='center',
-            ha='left' if contrib[i] >= 0 else 'right',
-            color=colors[i]
-        )
-
-    ax_test = fig.add_subplot(gs[:, 2])
+    ax_test = fig.add_subplot(gs[rows, :])
     ax_test.plot(X_te[idx, :, 0], color='black')
     ax_test.axvline(WINDOW_SIZE // 2, color='red', ls=':')
     ax_test.set_title(f'Test sample {idx}\nProb={prob:.2f} -> Class {pred}')
