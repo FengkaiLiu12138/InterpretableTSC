@@ -1,10 +1,12 @@
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 
 from Tools.DatasetConverter import DatasetConverter
@@ -30,7 +32,97 @@ def build_windows(df: pd.DataFrame, window_size: int = WINDOW_SIZE):
     return np.array(X_list, dtype=np.float32), np.array(y_list, dtype=np.int64)
 
 
+def train_model(model, train_loader, epochs=3, lr=1e-3):
+    """Simple training loop for baseline models."""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = torch.nn.CrossEntropyLoss()
+    for _ in range(epochs):
+        model.train()
+        for xb, yb in train_loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            opt.zero_grad()
+            out = model(xb)
+            loss = loss_fn(out, yb)
+            loss.backward()
+            opt.step()
+    return model
+
+
+def gradient_importance(model, sample, class_idx=1):
+    """Compute gradient-based importance for a single sample."""
+    device = next(model.parameters()).device
+    inp = torch.from_numpy(sample[np.newaxis]).to(device)
+    inp.requires_grad_(True)
+    out = model(inp)
+    score = out[0, class_idx]
+    model.zero_grad()
+    score.backward()
+    grad = inp.grad.abs().detach().cpu().numpy()[0]
+    return grad.mean(axis=1)
+
+
+def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
+    """Plot prototype contribution grid."""
+    colors = ['green' if c >= 0 else 'red' for c in contrib]
+    from matplotlib import gridspec
+
+    fig = plt.figure(figsize=(50, 2 * N_PROTOTYPES))
+    gs = gridspec.GridSpec(N_PROTOTYPES, 3, width_ratios=[1, 0.4, 2], wspace=0.3)
+
+    for i in range(N_PROTOTYPES):
+        ax_p = fig.add_subplot(gs[i, 0])
+        ax_p.plot(protos[i, :, 0], color='blue')
+        ax_p.axvline(WINDOW_SIZE // 2, color='red', ls=':')
+        ax_p.set_ylabel(f'P{i}', rotation=0, labelpad=20, va='center')
+        ax_p.set_xticks([])
+
+        ax_b = fig.add_subplot(gs[i, 1])
+        ax_b.barh([0], [contrib[i]], color=colors[i])
+        ax_b.set_xlim(min(0, contrib.min()) - 0.1, max(0, contrib.max()) + 0.1)
+        ax_b.set_yticks([])
+        ax_b.set_xticks([])
+        ax_b.text(
+            contrib[i],
+            0,
+            f'{contrib[i]:.2f}',
+            va='center',
+            ha='left' if contrib[i] >= 0 else 'right',
+            color=colors[i]
+        )
+
+    ax_test = fig.add_subplot(gs[:, 2])
+    ax_test.plot(X_te[idx, :, 0], color='black')
+    ax_test.axvline(WINDOW_SIZE // 2, color='red', ls=':')
+    ax_test.set_title(f'Test sample {idx}\nProb={prob:.2f} -> Class {pred}')
+    ax_test.set_xticks([])
+
+    plt.tight_layout()
+    plt.savefig(os.path.join('figures', 'sample_contribution_grid.png'))
+    plt.close()
+
+
+def plot_gradient(sample, grad, fname, title):
+    """Plot input signal with gradient-based importance overlay."""
+    os.makedirs('figures', exist_ok=True)
+    plt.figure(figsize=(8, 4))
+    plt.plot(sample[:, 0], color='black', label='Close')
+    plt.fill_between(np.arange(len(grad)), sample[:, 0], sample[:, 0] + grad, color='red', alpha=0.3, label='Grad |dL/dx|')
+    plt.axvline(WINDOW_SIZE // 2, color='red', ls=':')
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join('figures', fname))
+    plt.close()
+
+
 def main():
+    parser = argparse.ArgumentParser(description='Prototype influence and model comparison')
+    parser.add_argument('--model', choices=['logreg', 'fcn', 'mlp'], default='logreg', help='Model for additional visualisation')
+    args = parser.parse_args()
+
     # Load and convert dataset
     dc = DatasetConverter(file_path=DATA_PATH, save_path=None)
     df = dc.convert(label_type=1, volume=True)
@@ -43,30 +135,27 @@ def main():
         X, y, test_size=TEST_RATIO, random_state=42, stratify=y
     )
 
-    # Select prototypes from the training set
+    # Select prototypes from the training set for the logreg baseline
     selector = PrototypeSelector(X_tr, y_tr, window_size=WINDOW_SIZE)
     protos, proto_labels, _, _ = selector.select_prototypes(
         num_prototypes=N_PROTOTYPES,
         selection_type='random'
     )
 
-    # Compute Euclidean distance features for train and test sets
+    # Compute Euclidean distance features
     extractor_tr = PrototypeFeatureExtractor(torch.from_numpy(X_tr), torch.from_numpy(protos))
     feats_tr = extractor_tr._compute_euclidean_features().mean(dim=2).numpy()
     extractor_te = PrototypeFeatureExtractor(torch.from_numpy(X_te), torch.from_numpy(protos))
     feats_te = extractor_te._compute_euclidean_features().mean(dim=2).numpy()
 
-    # Fit a simple logistic regression classifier on prototype distances
     from sklearn.linear_model import LogisticRegression
-
     clf = LogisticRegression(max_iter=1000)
     clf.fit(feats_tr, y_tr)
     preds = clf.predict(feats_te)
     prob_pos = clf.predict_proba(feats_te)[:, 1]
 
-    # Map each test sample to the closest prototype (for summary only)
-    dists = feats_te
-    closest = np.argmin(dists, axis=1)
+    # Map each test sample to the closest prototype
+    closest = np.argmin(feats_te, axis=1)
 
     # Summarize prototype influence
     counts = np.bincount(closest, minlength=N_PROTOTYPES)
@@ -75,58 +164,53 @@ def main():
         'closest_count': counts,
         'closest_percentage': counts / len(closest)
     })
-    summary_path = os.path.join('figures', 'prototype_influence_summary.csv')
     os.makedirs('figures', exist_ok=True)
-    summary.to_csv(summary_path, index=False)
+    summary.to_csv(os.path.join('figures', 'prototype_influence_summary.csv'), index=False)
     print('Prototype influence summary:')
     print(summary)
 
     from sklearn.metrics import accuracy_score
     acc = accuracy_score(y_te, preds)
-    print(f'Test Accuracy: {acc:.4f}')
+    print(f'LogReg Accuracy: {acc:.4f}')
 
-    # Visualization for a single test sample
+    # Visualize contributions for one sample
     idx = 0
-    nearest_idx = closest[idx]
-    plt.figure(figsize=(8, 4))
-    plt.plot(X_te[idx, :, 0], label='Test Close')
-    plt.plot(protos[nearest_idx, :, 0], '--', label=f'Prototype {nearest_idx} Close')
-    plt.axvline(WINDOW_SIZE // 2, color='red', ls=':')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join('figures', 'test_case_vs_prototype.png'))
-    plt.close()
-
-    # Visualization of prototype contributions using arrows
     contrib = clf.coef_[0] * feats_te[idx]
-    y_pos = np.arange(N_PROTOTYPES)
-    colors = ['green' if c >= 0 else 'red' for c in contrib]
+    plot_prototype_influence(idx, X_te, protos, contrib, prob_pos[idx], preds[idx])
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.axvline(0, color='black', linewidth=0.5)
-    for i, val in enumerate(contrib):
-        ax.annotate(
-            '',
-            xy=(val, i),
-            xytext=(0, i),
-            arrowprops=dict(arrowstyle='->', color=colors[i], lw=2),
-        )
-        ax.text(
-            val + (0.02 if val >= 0 else -0.02),
-            i,
-            f'{val:.2f}',
-            va='center',
-            ha='left' if val >= 0 else 'right',
-        )
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels([f'P{i}' for i in range(N_PROTOTYPES)])
-    ax.set_xlabel('Contribution to logit')
-    ax.set_title(
-        f'Sample {idx} Prototype Influence\nPred prob={prob_pos[idx]:.2f} -> Class {preds[idx]}'
-    )
-    plt.tight_layout()
-    plt.savefig(os.path.join('figures', 'sample_contribution_arrows.png'))
-    plt.close()
+    if args.model in {'fcn', 'mlp'}:
+        # Prepare data loaders
+        train_ds = TensorDataset(torch.from_numpy(X_tr), torch.from_numpy(y_tr))
+        test_ds = TensorDataset(torch.from_numpy(X_te), torch.from_numpy(y_te))
+        train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+        test_loader = DataLoader(test_ds, batch_size=64)
+
+        if args.model == 'fcn':
+            from BaselineModel.FCN_baseline import FCN
+            model = FCN(window_size=WINDOW_SIZE, n_vars=X.shape[2], num_classes=2)
+            name = 'FCN'
+        else:
+            from BaselineModel.MLP_baseline import MLP
+            model = MLP(window_size=WINDOW_SIZE, n_vars=X.shape[2], num_classes=2)
+            name = 'MLP'
+
+        model = train_model(model, train_loader)
+
+        # Evaluate accuracy
+        model.eval()
+        device = next(model.parameters()).device
+        all_preds = []
+        with torch.no_grad():
+            for xb, _ in test_loader:
+                xb = xb.to(device)
+                out = model(xb)
+                all_preds.append(out.argmax(dim=1).cpu())
+        all_preds = torch.cat(all_preds).numpy()
+        acc = accuracy_score(y_te, all_preds)
+        print(f'{name} Accuracy: {acc:.4f}')
+
+        grad = gradient_importance(model, X_te[idx])
+        plot_gradient(X_te[idx], grad, f'{name.lower()}_gradient.png', f'{name} Gradient Importance')
 
 
 if __name__ == '__main__':

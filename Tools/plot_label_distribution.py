@@ -40,8 +40,8 @@ def plot_label_distribution(
     width = 0.35
 
     plt.figure(figsize=(6, 4))
-    plt.bar([i - width / 2 for i in x], values1, width=width, label='Daily')
-    plt.bar([i + width / 2 for i in x], values2, width=width, label='Minute')
+    plt.bar([i - width / 2 for i in x], values1, width=width, label='Minute')
+    plt.bar([i + width / 2 for i in x], values2, width=width, label='Daily')
     for i, v in enumerate(values1):
         plt.text(i - width / 2, v + 0.05, str(v), ha='center', va='bottom')
     for i, v in enumerate(values2):
