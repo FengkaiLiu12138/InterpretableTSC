@@ -97,35 +97,47 @@ def main():
     plt.savefig(os.path.join('figures', 'test_case_vs_prototype.png'))
     plt.close()
 
-    # Visualization of prototype contributions using arrows
+    # Visualization showing prototypes on the left, weights in the middle and the
+    # test case on the right
     contrib = clf.coef_[0] * feats_te[idx]
-    y_pos = np.arange(N_PROTOTYPES)
     colors = ['green' if c >= 0 else 'red' for c in contrib]
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.axvline(0, color='black', linewidth=0.5)
-    for i, val in enumerate(contrib):
-        ax.annotate(
-            '',
-            xy=(val, i),
-            xytext=(0, i),
-            arrowprops=dict(arrowstyle='->', color=colors[i], lw=2),
-        )
-        ax.text(
-            val + (0.02 if val >= 0 else -0.02),
-            i,
-            f'{val:.2f}',
+    from matplotlib import gridspec
+
+    fig = plt.figure(figsize=(10, 2 * N_PROTOTYPES))
+    gs = gridspec.GridSpec(N_PROTOTYPES, 3, width_ratios=[1, 0.4, 2], wspace=0.3)
+
+    proto_axes = []
+    for i in range(N_PROTOTYPES):
+        ax_p = fig.add_subplot(gs[i, 0])
+        ax_p.plot(protos[i, :, 0], color='blue')
+        ax_p.axvline(WINDOW_SIZE // 2, color='red', ls=':')
+        ax_p.set_ylabel(f'P{i}', rotation=0, labelpad=20, va='center')
+        ax_p.set_xticks([])
+        proto_axes.append(ax_p)
+
+        ax_b = fig.add_subplot(gs[i, 1])
+        ax_b.barh([0], [contrib[i]], color=colors[i])
+        ax_b.set_xlim(min(0, contrib.min()) - 0.1, max(0, contrib.max()) + 0.1)
+        ax_b.set_yticks([])
+        ax_b.set_xticks([])
+        ax_b.text(
+            contrib[i],
+            0,
+            f'{contrib[i]:.2f}',
             va='center',
-            ha='left' if val >= 0 else 'right',
+            ha='left' if contrib[i] >= 0 else 'right',
+            color=colors[i]
         )
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels([f'P{i}' for i in range(N_PROTOTYPES)])
-    ax.set_xlabel('Contribution to logit')
-    ax.set_title(
-        f'Sample {idx} Prototype Influence\nPred prob={prob_pos[idx]:.2f} -> Class {preds[idx]}'
-    )
+
+    ax_test = fig.add_subplot(gs[:, 2])
+    ax_test.plot(X_te[idx, :, 0], color='black')
+    ax_test.axvline(WINDOW_SIZE // 2, color='red', ls=':')
+    ax_test.set_title(f'Test sample {idx}\nProb={prob_pos[idx]:.2f} -> Class {preds[idx]}')
+    ax_test.set_xticks([])
+
     plt.tight_layout()
-    plt.savefig(os.path.join('figures', 'sample_contribution_arrows.png'))
+    plt.savefig(os.path.join('figures', 'sample_contribution_grid.png'))
     plt.close()
 
 
