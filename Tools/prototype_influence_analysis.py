@@ -75,25 +75,26 @@ def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
     fig = plt.figure(figsize=(10, 2 * N_SHOW))
     gs = gridspec.GridSpec(N_SHOW, 2, width_ratios=[1, 1], wspace=0.3)
 
-
     proto_axes = []
     top_idx = np.argsort(np.abs(contrib))[-N_SHOW:][::-1]
     for row, i in enumerate(top_idx):
         ax_p = fig.add_subplot(gs[row, 0])
+        ax_s = fig.add_subplot(gs[row, 1])
         ax_p.plot(protos[i, :, 0], color='blue')
         ax_p.axvline(WINDOW_SIZE // 2, color='red', ls=':')
         ax_p.set_ylabel(f'P{i}', rotation=0, labelpad=15, va='center')
         ax_p.set_xticks([])
-        proto_axes.append((ax_p, i))
 
-    ax_test = fig.add_subplot(gs[:, 1])
-    ax_test.plot(X_te[idx, :, 0], color='black')
-    ax_test.axvline(WINDOW_SIZE // 2, color='red', ls=':')
-    ax_test.set_title(f'Test sample {idx}\nProb={prob:.2f} -> Class {pred}')
-    ax_test.set_xticks([])
+        ax_s.plot(X_te[idx, :, 0], color='black')
+        ax_s.axvline(WINDOW_SIZE // 2, color='red', ls=':')
+        ax_s.set_xticks([])
+        if row == 0:
+            ax_s.set_title(f'Test sample {idx}\nProb={prob:.2f} -> Class {pred}')
+
+        proto_axes.append((ax_p, ax_s, i))
 
     from matplotlib.patches import ConnectionPatch
-    for ax_p, i in proto_axes:
+    for ax_p, ax_s, i in proto_axes:
         x = WINDOW_SIZE // 2
         y_proto = protos[i, x, 0]
         y_sample = X_te[idx, x, 0]
@@ -104,14 +105,14 @@ def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
             axesA=ax_p,
             xyB=(x, y_sample),
             coordsB="data",
-            axesB=ax_test,
+            axesB=ax_s,
             color=colors[i],
             lw=1,
         )
         fig.add_artist(con)
 
         pt_a = ax_p.transData.transform((x, y_proto))
-        pt_b = ax_test.transData.transform((x, y_sample))
+        pt_b = ax_s.transData.transform((x, y_sample))
         mid = (pt_a + pt_b) / 2
         mid_fig = fig.transFigure.inverted().transform(mid)
         fig.text(
@@ -127,7 +128,6 @@ def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
     plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
     plt.savefig(os.path.join('figures', 'sample_contribution_grid.png'))
     plt.close()
-
 
 def plot_gradient(sample, grad, fname, title):
     """Plot input signal with gradient-based importance overlay."""
