@@ -13,7 +13,7 @@ from PrototypeBasedModel import PrototypeSelector, PrototypeFeatureExtractor
 # Parameters
 DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'Dataset', 'ftse_minute_data_daily.csv')
 WINDOW_SIZE = 600
-N_PROTOTYPES = 5
+N_PROTOTYPES = 10
 TEST_RATIO = 0.2
 
 
@@ -43,16 +43,29 @@ def main():
         X, y, test_size=TEST_RATIO, random_state=42, stratify=y
     )
 
-    # Select prototypes from training set (positive class only)
+    # Select prototypes from the training set
     selector = PrototypeSelector(X_tr, y_tr, window_size=WINDOW_SIZE)
     protos, proto_labels, _, _ = selector.select_prototypes(
         num_prototypes=N_PROTOTYPES,
-        selection_type='positive_only'
+        selection_type='random'
     )
 
-    # Compute Euclidean distances from test windows to prototypes
-    extractor = PrototypeFeatureExtractor(torch.from_numpy(X_te), torch.from_numpy(protos))
-    dists = extractor._compute_euclidean_features().mean(dim=2).numpy()
+    # Compute Euclidean distance features for train and test sets
+    extractor_tr = PrototypeFeatureExtractor(torch.from_numpy(X_tr), torch.from_numpy(protos))
+    feats_tr = extractor_tr._compute_euclidean_features().mean(dim=2).numpy()
+    extractor_te = PrototypeFeatureExtractor(torch.from_numpy(X_te), torch.from_numpy(protos))
+    feats_te = extractor_te._compute_euclidean_features().mean(dim=2).numpy()
+
+    # Fit a simple logistic regression classifier on prototype distances
+    from sklearn.linear_model import LogisticRegression
+
+    clf = LogisticRegression(max_iter=1000)
+    clf.fit(feats_tr, y_tr)
+    preds = clf.predict(feats_te)
+    prob_pos = clf.predict_proba(feats_te)[:, 1]
+
+    # Map each test sample to the closest prototype (for summary only)
+    dists = feats_te
     closest = np.argmin(dists, axis=1)
 
     # Summarize prototype influence
@@ -68,6 +81,10 @@ def main():
     print('Prototype influence summary:')
     print(summary)
 
+    from sklearn.metrics import accuracy_score
+    acc = accuracy_score(y_te, preds)
+    print(f'Test Accuracy: {acc:.4f}')
+
     # Visualization for a single test sample
     idx = 0
     nearest_idx = closest[idx]
@@ -80,13 +97,35 @@ def main():
     plt.savefig(os.path.join('figures', 'test_case_vs_prototype.png'))
     plt.close()
 
-    plt.figure(figsize=(6, 4))
-    plt.bar(np.arange(N_PROTOTYPES), dists[idx])
-    plt.xlabel('Prototype')
-    plt.ylabel('Euclidean distance')
-    plt.title(f'Distance for sample {idx}')
+    # Visualization of prototype contributions using arrows
+    contrib = clf.coef_[0] * feats_te[idx]
+    y_pos = np.arange(N_PROTOTYPES)
+    colors = ['green' if c >= 0 else 'red' for c in contrib]
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.axvline(0, color='black', linewidth=0.5)
+    for i, val in enumerate(contrib):
+        ax.annotate(
+            '',
+            xy=(val, i),
+            xytext=(0, i),
+            arrowprops=dict(arrowstyle='->', color=colors[i], lw=2),
+        )
+        ax.text(
+            val + (0.02 if val >= 0 else -0.02),
+            i,
+            f'{val:.2f}',
+            va='center',
+            ha='left' if val >= 0 else 'right',
+        )
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels([f'P{i}' for i in range(N_PROTOTYPES)])
+    ax.set_xlabel('Contribution to logit')
+    ax.set_title(
+        f'Sample {idx} Prototype Influence\nPred prob={prob_pos[idx]:.2f} -> Class {preds[idx]}'
+    )
     plt.tight_layout()
-    plt.savefig(os.path.join('figures', 'test_case_distance.png'))
+    plt.savefig(os.path.join('figures', 'sample_contribution_arrows.png'))
     plt.close()
 
 
