@@ -129,7 +129,6 @@ def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
     plt.savefig(os.path.join('figures', 'sample_contribution_grid.png'))
     plt.close()
 
-
 def plot_gradient(sample, grad, fname, title):
     """Plot input signal with gradient-based importance overlay."""
     os.makedirs('figures', exist_ok=True)
