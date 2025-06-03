@@ -69,26 +69,55 @@ def plot_prototype_influence(idx, X_te, protos, contrib, prob, pred):
     colors = ['green' if c >= 0 else 'red' for c in contrib]
     from matplotlib import gridspec
 
-    cols = 2
-    rows = int(np.ceil(N_PROTOTYPES / cols))
+    fig = plt.figure(figsize=(12, 2 * N_PROTOTYPES))
+    gs = gridspec.GridSpec(N_PROTOTYPES, 2, width_ratios=[1, 2], wspace=0.3)
 
-    fig = plt.figure(figsize=(cols * 6, rows * 2 + 3))
-    gs = gridspec.GridSpec(rows + 1, cols, hspace=0.6, wspace=0.4)
-
+    proto_axes = []
     for i in range(N_PROTOTYPES):
-        r, c = divmod(i, cols)
-        ax_p = fig.add_subplot(gs[r, c])
+        ax_p = fig.add_subplot(gs[i, 0])
         ax_p.plot(protos[i, :, 0], color='blue')
         ax_p.axvline(WINDOW_SIZE // 2, color='red', ls=':')
-        ax_p.set_title(f'P{i}  [{contrib[i]:.2f}]', color=colors[i])
+        ax_p.set_ylabel(f'P{i}', rotation=0, labelpad=15, va='center')
         ax_p.set_xticks([])
-        ax_p.set_yticks([])
+        proto_axes.append(ax_p)
 
-    ax_test = fig.add_subplot(gs[rows, :])
+    ax_test = fig.add_subplot(gs[:, 1])
     ax_test.plot(X_te[idx, :, 0], color='black')
     ax_test.axvline(WINDOW_SIZE // 2, color='red', ls=':')
     ax_test.set_title(f'Test sample {idx}\nProb={prob:.2f} -> Class {pred}')
     ax_test.set_xticks([])
+
+    from matplotlib.patches import ConnectionPatch
+    for i, ax_p in enumerate(proto_axes):
+        x = WINDOW_SIZE // 2
+        y_proto = protos[i, x, 0]
+        y_sample = X_te[idx, x, 0]
+
+        con = ConnectionPatch(
+            xyA=(x, y_proto),
+            coordsA="data",
+            axesA=ax_p,
+            xyB=(x, y_sample),
+            coordsB="data",
+            axesB=ax_test,
+            color=colors[i],
+            lw=1,
+        )
+        fig.add_artist(con)
+
+        pt_a = ax_p.transData.transform((x, y_proto))
+        pt_b = ax_test.transData.transform((x, y_sample))
+        mid = (pt_a + pt_b) / 2
+        mid_fig = fig.transFigure.inverted().transform(mid)
+        fig.text(
+            mid_fig[0],
+            mid_fig[1],
+            f"{contrib[i]:.2f}",
+            ha="center",
+            va="center",
+            color=colors[i],
+            fontsize=8,
+        )
 
     plt.tight_layout()
     plt.savefig(os.path.join('figures', 'sample_contribution_grid.png'))
