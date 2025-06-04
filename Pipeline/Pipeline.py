@@ -175,15 +175,16 @@ class Pipeline:
                 mn, mx = df[col].min(), df[col].max()
                 df[col] = (df[col] - mn) / (mx - mn + 1e-12)
 
-        # Build sliding windows of size self.window_size
+        # Build sliding windows of size ``self.window_size``.
+        # A window is labelled ``1`` if *any* point within the window
+        # is a turning point.
         X_list, y_list = [], []
-        half_w = self.window_size // 2
         total_len = len(df)
         for start_idx in range(total_len - self.window_size + 1):
             end_idx = start_idx + self.window_size
-            window_data = df.iloc[start_idx:end_idx][feature_cols].values
-            center_label_idx = start_idx + half_w
-            label = df.iloc[center_label_idx]["Labels"]
+            window_slice = df.iloc[start_idx:end_idx]
+            window_data = window_slice[feature_cols].values
+            label = 1 if window_slice["Labels"].max() > 0 else 0
             X_list.append(window_data)
             y_list.append(label)
 
