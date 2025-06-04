@@ -751,7 +751,7 @@ if __name__ == "__main__":
     ]
     # Prototype-based models
     # selection_types = ["random", "k-means", "gmm"]
-    selection_types = ["random"]
+    selection_types = ["random", 'k-means', 'gmm']
     distance_metrics = ["euclidean", "cosine"]
     prototype_models = [
         PrototypeResNet,
@@ -781,9 +781,7 @@ if __name__ == "__main__":
             balance=True,
             balance_strategy="smote",  # requires imbalanced-learn
             optimize_metric="f1",
-            cost_sensitive="weighted_ce",  # use FocalLoss
-            focal_alpha=1.0,
-            focal_gamma=2.0
+            cost_sensitive="weighted_ce",
         )
         bst_threshold = pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
         results = pipeline.evaluate(threshold=bst_threshold)
@@ -797,7 +795,7 @@ if __name__ == "__main__":
                     file_path=CSV_FILE_PATH_1,
                     n_vars=n_var_1,
                     num_classes=2,
-                    result_dir=f"../Result/may/positive_only/{proto_class.__name__}/{selection_type}_{distance_metric}",
+                    result_dir=f"../Result/may/{proto_class.__name__}/{selection_type}_{distance_metric}",
                     use_prototype=True,
                     num_prototypes=10,
                     prototype_selection_type=selection_type,
@@ -814,7 +812,7 @@ if __name__ == "__main__":
                     balance=True,
                     balance_strategy="smote",
                     optimize_metric="f1",
-                    cost_sensitive="weighted_ce",  # Example of weighted CE
+                    cost_sensitive="weighted_ce"
                 )
                 bst_threshold = prototype_pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
                 proto_results = prototype_pipeline.evaluate(threshold=bst_threshold)
@@ -845,9 +843,7 @@ if __name__ == "__main__":
             balance=True,
             balance_strategy="smote",  # requires imbalanced-learn
             optimize_metric="f1",
-            cost_sensitive="weighted_ce",  # use FocalLoss
-            focal_alpha=1.0,
-            focal_gamma=2.0
+            cost_sensitive="weighted_ce",
         )
 
         bst_threshold = pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
@@ -863,7 +859,7 @@ if __name__ == "__main__":
                     file_path=CSV_FILE_PATH_2,
                     n_vars=n_var_2,
                     num_classes=2,
-                    result_dir=f"../Result/positive_only/{proto_class.__name__}/{selection_type}_{distance_metric}",
+                    result_dir=f"../Result/{proto_class.__name__}/{selection_type}_{distance_metric}",
                     use_prototype=True,
                     num_prototypes=10,
                     prototype_selection_type=selection_type,
