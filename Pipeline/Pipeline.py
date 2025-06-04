@@ -184,7 +184,7 @@ class Pipeline:
             end_idx = start_idx + self.window_size
             window_slice = df.iloc[start_idx:end_idx]
             window_data = window_slice[feature_cols].values
-            label = 1 if window_slice["Labels"].max() > 0 else 0
+            label = 1 if window_slice["Labels"][-10:].max() > 0 else 0
             X_list.append(window_data)
             y_list.append(label)
 
