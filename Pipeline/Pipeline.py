@@ -210,24 +210,6 @@ class Pipeline:
             t_data = torch.from_numpy(rem_data)
             t_proto = torch.from_numpy(protos)
             extractor = PrototypeFeatureExtractor(t_data, t_proto)
-            # Save feature maps for several samples for later analysis
-            n_feat_samples = min(10, t_data.shape[0])
-            for idx in range(n_feat_samples):
-                extractor.plot_prototype_feature_map(
-                    metric=self.prototype_distance_metric,
-                    save_path=os.path.join(self.result_dir, f"prototype_feature_map_{idx}.png"),
-                    sample_idx=idx,
-                )
-            extractor.plot_prototype_cycles(
-                save_dir=self.result_dir,
-                short_window=30,
-                long_window=120,
-                prefix="prototype_cycle"
-            )
-            extractor.plot_prototype_series(
-                save_dir=self.result_dir,
-                prefix="prototype_raw"
-            )
             feats = extractor.compute_prototype_features(metric=self.prototype_distance_metric)
             X = feats.numpy()
             y = rem_labels
@@ -280,6 +262,41 @@ class Pipeline:
             # recompute features for pruned prototypes if needed later
         print(f"[prune_prototypes] Kept {self.num_prototypes} prototypes.")
         return True
+
+    def _save_final_prototypes(self) -> None:
+        """Save visualizations for the currently stored prototypes."""
+        if not self.use_prototype or self._prototypes is None:
+            return
+
+        os.makedirs(self.result_dir, exist_ok=True)
+
+        if self._rem_data is not None:
+            t_data = torch.from_numpy(self._rem_data)
+        else:
+            t_data = torch.empty(0)
+        t_proto = torch.from_numpy(self._prototypes)
+
+        extractor = PrototypeFeatureExtractor(t_data, t_proto)
+
+        if t_data.numel() > 0:
+            n_feat_samples = min(10, t_data.shape[0])
+            for idx in range(n_feat_samples):
+                extractor.plot_prototype_feature_map(
+                    metric=self.prototype_distance_metric,
+                    save_path=os.path.join(self.result_dir, f"prototype_feature_map_{idx}.png"),
+                    sample_idx=idx,
+                )
+
+        extractor.plot_prototype_cycles(
+            save_dir=self.result_dir,
+            short_window=30,
+            long_window=120,
+            prefix="prototype_cycle",
+        )
+        extractor.plot_prototype_series(
+            save_dir=self.result_dir,
+            prefix="prototype_raw",
+        )
 
     def data_loader(
             self,
@@ -612,6 +629,9 @@ class Pipeline:
                 optimizer = optim.SGD(self.model.parameters(), lr=lr, weight_decay=wd)
 
             val_loss = self._train_loop(optimizer, criterion, epochs=ep, patience=patience)
+            if self.use_prototype:
+                self._save_final_prototypes()
+
             return self.best_model, val_loss
 
         else:
@@ -647,6 +667,9 @@ class Pipeline:
                     self.data_loader(batch_size=batch_size, balance=balance, balance_strategy=balance_strategy)
                     optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
                     val_loss = self._train_loop(optimizer, criterion, epochs=finetune_epochs, patience=patience)
+
+            if self.use_prototype:
+                self._save_final_prototypes()
 
             return self.best_model, val_loss
 
