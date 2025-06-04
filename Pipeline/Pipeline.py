@@ -143,6 +143,8 @@ class Pipeline:
 
         self._prototypes = None
         self._proto_labels = None
+        self._rem_data = None
+        self._rem_labels = None
 
         self._load_raw_csv()
 
@@ -200,6 +202,9 @@ class Pipeline:
             )
             self._prototypes = protos
             self._proto_labels = proto_labels
+            # store remaining data for potential prototype pruning later
+            self._rem_data = rem_data
+            self._rem_labels = rem_labels
 
             # Compute prototype features
             t_data = torch.from_numpy(rem_data)
@@ -228,6 +233,53 @@ class Pipeline:
             y = rem_labels
 
         self.dataset = (X, y)
+
+    def prune_prototypes(self, min_usage: int = 1) -> bool:
+        """Prune rarely used prototypes based on nearest-neighbour counts.
+
+        Parameters
+        ----------
+        min_usage : int
+            Minimum number of samples that must choose a prototype as the
+            nearest neighbour to keep it. Prototypes with count < ``min_usage``
+            are removed.
+
+        Returns
+        -------
+        bool
+            ``True`` if any prototype was pruned.
+        """
+        if not self.use_prototype or self._prototypes is None:
+            return False
+
+        X, _ = self.dataset
+        if X.ndim != 3:
+            return False
+
+        # mean across variables -> (N, num_prototypes)
+        proto_scores = X.mean(axis=2)
+        if self.prototype_distance_metric == "cosine":
+            nearest = proto_scores.argmax(axis=1)
+        else:
+            nearest = proto_scores.argmin(axis=1)
+        counts = np.bincount(nearest, minlength=self._prototypes.shape[0])
+        keep_mask = counts >= min_usage
+        if keep_mask.all():
+            print("[prune_prototypes] No prototypes pruned.")
+            return False
+
+        self._prototypes = self._prototypes[keep_mask]
+        self._proto_labels = self._proto_labels[keep_mask]
+        self.num_prototypes = self._prototypes.shape[0]
+
+        # update dataset feature dimension
+        X_pruned = X[:, keep_mask, :]
+        self.dataset = (X_pruned, self.dataset[1])
+        if self._rem_data is not None:
+            self._rem_data = self._rem_data  # unchanged but kept for clarity
+            # recompute features for pruned prototypes if needed later
+        print(f"[prune_prototypes] Kept {self.num_prototypes} prototypes.")
+        return True
 
     def data_loader(
             self,
@@ -495,6 +547,9 @@ class Pipeline:
             cost_sensitive: Literal["weighted_ce", "focal", None] = None,
             focal_alpha: float = 1.0,
             focal_gamma: float = 2.0,
+            prune: bool = False,
+            prune_threshold: int = 1,
+            finetune_epochs: int = 10,
     ):
         """
         Arguments:
@@ -502,6 +557,10 @@ class Pipeline:
              * "weighted_ce": Weighted cross-entropy
              * "focal": Focal Loss
              * None: default cross-entropy
+          - prune: whether to prune rarely used prototypes after the initial
+            training phase.
+          - prune_threshold: minimum usage count for a prototype to be kept.
+          - finetune_epochs: additional epochs to fine-tune after pruning.
         """
         self._opt_metric = optimize_metric.lower()
         self._normalize = normalize
@@ -580,6 +639,15 @@ class Pipeline:
 
             optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
             val_loss = self._train_loop(optimizer, criterion, epochs=epochs, patience=patience)
+
+            if prune and self.use_prototype:
+                pruned = self.prune_prototypes(min_usage=prune_threshold)
+                if pruned:
+                    # recreate loaders with pruned dataset
+                    self.data_loader(batch_size=batch_size, balance=balance, balance_strategy=balance_strategy)
+                    optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+                    val_loss = self._train_loop(optimizer, criterion, epochs=finetune_epochs, patience=patience)
+
             return self.best_model, val_loss
 
     def predict_proba(self):
