@@ -109,7 +109,7 @@ class Pipeline:
         self.file_path = file_path
         self.n_vars = n_vars
         self.num_classes = num_classes
-        self.window_size = 600
+        self.window_size = 30
         self.use_prototype = use_prototype
         self.num_prototypes = num_prototypes
         self.prototype_selection_type = prototype_selection_type
@@ -760,33 +760,33 @@ if __name__ == "__main__":
         PrototypeFCN,
     ]
 
-    # for model_class in baseline_models:
-    #     pipeline = Pipeline(
-    #         model_class=model_class,
-    #         file_path=CSV_FILE_PATH_1,
-    #         n_vars=n_var_1,
-    #         num_classes=2,
-    #         result_dir=f"../Result/may/{model_class.__name__}",
-    #         use_prototype=False
-    #     )
-    #
-    #     pipeline.train(
-    #         use_hpo=True,
-    #         n_trials=10,
-    #         epochs=10,
-    #         batch_size=32,
-    #         patience=5,
-    #         normalize=True,
-    #         balance=True,
-    #         balance_strategy="smote",  # requires imbalanced-learn
-    #         optimize_metric="f1",
-    #         cost_sensitive="weighted_ce",  # use FocalLoss
-    #         focal_alpha=1.0,
-    #         focal_gamma=2.0
-    #     )
-    #     bst_threshold = pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
-    #     results = pipeline.evaluate(threshold=bst_threshold)
-    #     print(f"{model_class.__name__} results:", results)
+    for model_class in baseline_models:
+        pipeline = Pipeline(
+            model_class=model_class,
+            file_path=CSV_FILE_PATH_1,
+            n_vars=n_var_1,
+            num_classes=2,
+            result_dir=f"../Result/may/{model_class.__name__}",
+            use_prototype=False
+        )
+
+        pipeline.train(
+            use_hpo=True,
+            n_trials=10,
+            epochs=10,
+            batch_size=32,
+            patience=5,
+            normalize=True,
+            balance=True,
+            balance_strategy="smote",  # requires imbalanced-learn
+            optimize_metric="f1",
+            cost_sensitive="weighted_ce",  # use FocalLoss
+            focal_alpha=1.0,
+            focal_gamma=2.0
+        )
+        bst_threshold = pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
+        results = pipeline.evaluate(threshold=bst_threshold)
+        print(f"{model_class.__name__} results:", results)
 
     for proto_class in prototype_models:
         for selection_type in selection_types:
@@ -822,36 +822,36 @@ if __name__ == "__main__":
                     proto_results,
                 )
 
-    # # Daily
-    # for model_class in baseline_models:
-    #     pipeline = Pipeline(
-    #         model_class=model_class,
-    #         file_path=CSV_FILE_PATH_2,
-    #         n_vars=n_var_2,
-    #         num_classes=2,
-    #         result_dir=f"../Result/{model_class.__name__}",
-    #         use_prototype=False
-    #     )
-    #
-    #     # Train example: enable FocalLoss + SMOTE + auto hpo
-    #     pipeline.train(
-    #         use_hpo=True,
-    #         n_trials=10,
-    #         epochs=10,  # just an initial range for Optuna, actual ep is overridden by best param
-    #         batch_size=32,
-    #         patience=5,
-    #         normalize=True,
-    #         balance=True,
-    #         balance_strategy="smote",  # requires imbalanced-learn
-    #         optimize_metric="f1",
-    #         cost_sensitive="weighted_ce",  # use FocalLoss
-    #         focal_alpha=1.0,
-    #         focal_gamma=2.0
-    #     )
-    #
-    #     bst_threshold = pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
-    #     results = pipeline.evaluate(threshold=bst_threshold)
-    #     print(f"{model_class.__name__} results:", results)
+    # Daily
+    for model_class in baseline_models:
+        pipeline = Pipeline(
+            model_class=model_class,
+            file_path=CSV_FILE_PATH_2,
+            n_vars=n_var_2,
+            num_classes=2,
+            result_dir=f"../Result/{model_class.__name__}",
+            use_prototype=False
+        )
+
+        # Train example: enable FocalLoss + SMOTE + auto hpo
+        pipeline.train(
+            use_hpo=True,
+            n_trials=10,
+            epochs=10,  # just an initial range for Optuna, actual ep is overridden by best param
+            batch_size=32,
+            patience=5,
+            normalize=True,
+            balance=True,
+            balance_strategy="smote",  # requires imbalanced-learn
+            optimize_metric="f1",
+            cost_sensitive="weighted_ce",  # use FocalLoss
+            focal_alpha=1.0,
+            focal_gamma=2.0
+        )
+
+        bst_threshold = pipeline.find_best_threshold(step=0.01, metric="f1", plot_curve=False)
+        results = pipeline.evaluate(threshold=bst_threshold)
+        print(f"{model_class.__name__} results:", results)
 
     # Prototype-based models
     for proto_class in prototype_models:
