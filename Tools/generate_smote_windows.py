@@ -12,7 +12,7 @@ except ImportError:
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'Dataset', 'ftse_minute_data_daily.csv')
 
-WINDOW_SIZE = 600
+WINDOW_SIZE = 30
 FEATURE_COLS = ["Close", "High", "Low", "Open", "Volume"]
 
 
