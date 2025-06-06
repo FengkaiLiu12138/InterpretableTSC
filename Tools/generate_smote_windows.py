@@ -3,6 +3,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from Tools.DatasetConverter import DatasetConverter
 
+try:
+    from imblearn.over_sampling import SMOTE
+    _has_smote = True
+except ImportError:
+    _has_smote = False
+    print("Warning: imbalanced-learn is not installed. SMOTE will not be available.")
+
 DATA_PATH = os.path.join(os.path.dirname(__file__), '..', 'Dataset', 'ftse_minute_data_daily.csv')
 
 WINDOW_SIZE = 600
@@ -21,28 +28,20 @@ def build_windows(df):
     return np.array(X_list), np.array(y_list)
 
 
-def simple_smote(X, y, random_state=42):
-    rng = np.random.default_rng(random_state)
-    maj_count = np.sum(y == 0)
-    min_count = np.sum(y == 1)
-    if min_count == 0:
-        raise ValueError("No minority samples to oversample")
-    n_needed = maj_count - min_count
-    minority_idx = np.where(y == 1)[0]
-    synth_samples = []
-    for _ in range(n_needed):
-        i = rng.choice(minority_idx)
-        j = rng.choice(minority_idx)
-        while j == i:
-            j = rng.choice(minority_idx)
-        diff = X[j] - X[i]
-        gap = rng.random()
-        new_sample = X[i] + gap * diff
-        synth_samples.append(new_sample)
-    X_syn = np.array(synth_samples)
-    y_syn = np.ones(len(X_syn), dtype=y.dtype)
-    X_bal = np.concatenate([X, X_syn], axis=0)
-    y_bal = np.concatenate([y, y_syn], axis=0)
+def pipeline_smote(X: np.ndarray, y: np.ndarray, random_state: int = 42):
+    """Apply SMOTE using the same approach as ``Pipeline.data_loader``."""
+    if not _has_smote:
+        raise ImportError(
+            "imbalanced-learn is not installed. SMOTE is unavailable."
+        )
+
+    N, W, D = X.shape
+    X_2d = X.reshape(N, -1)
+    sm = SMOTE(random_state=random_state)
+    X_bal_2d, y_bal = sm.fit_resample(X_2d, y)
+    new_N = X_bal_2d.shape[0]
+    X_bal = X_bal_2d.reshape(new_N, W, D)
+    X_syn = X_bal[len(X) :]
     return X_bal, y_bal, X_syn
 
 
@@ -64,7 +63,7 @@ def main():
     dc = DatasetConverter(file_path=DATA_PATH, save_path=None)
     df = dc.convert(label_type=1, volume=True)
     X, y = build_windows(df)
-    X_bal, y_bal, X_syn = simple_smote(X, y)
+    X_bal, y_bal, X_syn = pipeline_smote(X, y)
     print(f"Original dataset: X={X.shape}, y={y.shape}")
     print(f"After SMOTE: X={X_bal.shape}, y={y_bal.shape}")
     np.set_printoptions(precision=4, suppress=True)
