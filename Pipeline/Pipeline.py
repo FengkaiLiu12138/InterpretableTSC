@@ -564,7 +564,7 @@ class Pipeline:
             cost_sensitive: Literal["weighted_ce", "focal", None] = None,
             focal_alpha: float = 1.0,
             focal_gamma: float = 2.0,
-            prune: bool = False,
+            prune: bool = True,
             prune_threshold: int = 1,
             finetune_epochs: int = 10,
     ):
